@@ -1,0 +1,150 @@
+name: build-pdf_reader
+
+# 聚合构建仓库的 pdf_reader workflow。
+# 源码在私有仓库 (https://code.zsrhkj.com/zsrhkj/pdf-reader.git)，CI 内用 token clone，
+# 然后跑产品自带的 scripts/build-*.sh，最后上传 OSS + GitHub Release。
+# 构建逻辑不在本仓库，全部留在产品仓库 scripts/ 里。
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "产品仓库分支/标签 (默认 main)"
+        required: false
+        default: main
+      platforms:
+        description: "构建平台 (all / win / mac / linux)"
+        required: false
+        default: all
+        type: choice
+        options: [all, win, mac, linux]
+      upload_oss:
+        description: "是否上传阿里云 OSS"
+        required: false
+        default: false
+        type: boolean
+      release:
+        description: "是否附到 GitHub Release"
+        required: false
+        default: false
+        type: boolean
+  # 后续可接源码仓库 webhook -> repository_dispatch 自动触发：
+  # repository_dispatch:
+  #   types: [pdf_reader-build]
+
+# 仅 release 时需要写权限
+permissions:
+  contents: write
+
+env:
+  REPO_PATH: code.zsrhkj.com/zsrhkj/pdf-reader.git
+  SRC_DIR: src
+
+jobs:
+  build:
+    name: build (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: linux
+            os: ubuntu-latest
+            script: scripts/build-linux.sh
+            rid: linux-x64
+          - label: mac
+            os: macos-latest
+            script: scripts/build-mac.sh
+            rid: osx-arm64
+          - label: win
+            os: windows-latest
+            script: scripts/build-win.sh
+            rid: win-x64
+
+    steps:
+      # 平台过滤：platforms != all 且 != 当前 label 时跳过整个 job 的后续步骤
+      - name: Resolve run flag
+        id: flag
+        shell: bash
+        run: |
+          want='${{ github.event.inputs.platforms }}'
+          [ -z "$want" ] && want=all
+          if [ "$want" = "all" ] || [ "$want" = "${{ matrix.label }}" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "skip ${{ matrix.label }} (selected: $want)"
+          fi
+
+      # Checkout 私有产品源码。
+      # 用 git credential helper 把 token 写入内存，避免内嵌进 remote URL（不进进程列表/日志）。
+      - name: Checkout product source
+        if: steps.flag.outputs.run == 'true'
+        shell: bash
+        env:
+          REPO_USER: ${{ secrets.REPO_USER }}
+          REPO_TOKEN: ${{ secrets.REPO_TOKEN }}
+          REF: ${{ github.event.inputs.ref }}
+        run: |
+          set -euo pipefail
+          ref="${REF:-main}"
+          # URL-encode 凭据中的特殊字符由 git 内部处理；改用 credential helper 注入避免 URL 内嵌。
+          git -c credential.helper= \
+              -c credential.helper='!f() { echo "username=$REPO_USER"; echo "password=$REPO_TOKEN"; }; f' \
+              clone --depth 1 -b "$ref" \
+              "https://${REPO_PATH}" "$SRC_DIR"
+          echo "cloned ref=$ref"
+
+      - name: Setup .NET 8
+        if: steps.flag.outputs.run == 'true'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      # 平台专属工具链。产品脚本本身大多自带安装步骤，这里仅补 runner 缺省项。
+      - name: Install WiX (Windows)
+        if: steps.flag.outputs.run == 'true' && matrix.label == 'win'
+        shell: bash
+        run: dotnet tool install --global wix --version 5.0.2 || true
+
+      - name: Install Linux packaging tools
+        if: steps.flag.outputs.run == 'true' && matrix.label == 'linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg
+          # fpm 可选（用于 .rpm），脚本在缺失时已回退；如需 rpm 取消下行注释：
+          # sudo gem install --no-document fpm
+
+      - name: Build
+        if: steps.flag.outputs.run == 'true'
+        working-directory: ${{ env.SRC_DIR }}
+        shell: bash
+        run: bash "${{ matrix.script }}"
+
+      - name: Upload to Aliyun OSS
+        if: steps.flag.outputs.run == 'true' && github.event.inputs.upload_oss == 'true'
+        working-directory: ${{ env.SRC_DIR }}
+        shell: bash
+        env:
+          OSS_KEY_ID: ${{ secrets.OSS_KEY_ID }}
+          OSS_KEY_SECRET: ${{ secrets.OSS_KEY_SECRET }}
+        run: bash scripts/upload-oss.sh
+
+      - name: Upload build artifacts
+        if: steps.flag.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pdf_reader-${{ matrix.rid }}
+          path: ${{ env.SRC_DIR }}/build/publish/**
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Attach to GitHub Release
+        if: >
+          steps.flag.outputs.run == 'true' &&
+          (startsWith(github.ref, 'refs/tags/') || github.event.inputs.release == 'true')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.SRC_DIR }}/build/publish/**
+          fail_on_unmatched_files: false

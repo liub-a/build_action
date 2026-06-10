@@ -1,0 +1,22 @@
+# CI 内 clone 的产品源码（不入库）
+src/
+*/src/
+
+# 本地构建产物
+build/
+publish/
+dist/
+
+# 密钥/环境（绝不入库）
+.env
+.env.local
+*.pem
+*.key
+secrets/
+
+# 系统/编辑器
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
