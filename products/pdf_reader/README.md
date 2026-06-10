@@ -16,10 +16,9 @@
 |--------|------|
 | `REPO_USER` | 代码仓库用户名（clone 私有产品仓库） |
 | `REPO_TOKEN` | 代码仓库 access token 或密码（建议用只读 deploy token，仅限 pdf-reader 仓库） |
-| `OSS_KEY_ID` | 阿里云 OSS Access Key ID（`upload-oss.sh`） |
-| `OSS_KEY_SECRET` | 阿里云 OSS Access Key Secret |
 
-> `APP_PUBLISH_KEY` 当前硬编码在产品 `scripts/upload-oss.sh`（hub.zsrhkj.com 注册用，非高敏），本仓库不处理。
+> OSS 上传 + hub.zsrhkj.com 版本注册**不在 Action 内做**（CI 上传太慢），改本地执行，
+> 见下方「本地发布」。因此 `OSS_KEY_ID/OSS_KEY_SECRET` 不需配进 GitHub Secrets。
 > 私有 NuGet 包 `china-esign` 已 vendored 在产品仓库 `packages/`，无需额外 secret。
 
 ### 如何取得 `REPO_TOKEN`
@@ -49,10 +48,27 @@ Actions → `build-pdf_reader` → Run workflow：
 |------|------|
 | `ref` | 产品仓库分支/标签，默认 `main` |
 | `platforms` | `all` / `win` / `mac` / `linux` |
-| `upload_oss` | 是否上传阿里云 OSS |
-| `release` | 是否附到 GitHub Release |
+| `release` | 是否附到 GitHub Release（自动按版本号生成 tag `pdf_reader-v<ver>`） |
 
 **首次验证建议**：先选 `platforms=linux`（最快、无签名），跑通 checkout → build → artifact 后再放开 mac/win。
+
+## 本地发布（OSS + hub 注册）
+
+Action 只打包产出 artifact。OSS 上传与 hub.zsrhkj.com 版本注册在本地做（CI 上传太慢）：
+
+```bash
+# 前置：gh 已登录；本机有产品仓库 /Volumes/Private/LB/pdf_reader
+export OSS_KEY_ID=<AccessKey ID>
+export OSS_KEY_SECRET=<AccessKey Secret>
+
+# 用最近一次成功 run；或显式传 RUN_ID
+bash scripts/publish-local.sh
+bash scripts/publish-local.sh <RUN_ID>
+bash scripts/publish-local.sh <RUN_ID> --dry-run   # 只下载+暂存，不上传
+```
+
+脚本会：`gh run download` 拉产物 → 拷进 `pdf_reader/build/publish/` → 调产品 `scripts/upload-oss.sh`（含 OSS 上传 + hub publish）。
+注意 `upload-oss.sh` 只处理 mac/linux 包（dmg/deb/rpm/tar.gz）；Windows exe 不在其登记范围。
 
 ## 平台工具链
 
@@ -60,4 +76,4 @@ Actions → `build-pdf_reader` → Run workflow：
 |------|--------|----------|
 | Linux | ubuntu-latest | `dpkg`（CI 装）；`fpm` 可选（rpm，缺失时脚本回退） |
 | macOS | macos-latest | `create-dmg` 可选（回退 hdiutil）；Python3 自带 |
-| Windows | windows-latest | WiX 5.0.2（CI `dotnet tool install`） |
+| Windows | windows-latest | WiX 5.0.2 + 扩展 Util/UI/Bal（CI 装） |
