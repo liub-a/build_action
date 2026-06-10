@@ -18,11 +18,6 @@ on:
         default: all
         type: choice
         options: [all, win, mac, linux]
-      upload_oss:
-        description: "是否上传阿里云 OSS"
-        required: false
-        default: false
-        type: boolean
       release:
         description: "是否附到 GitHub Release"
         required: false
@@ -130,24 +125,8 @@ jobs:
         shell: bash
         run: bash "${{ matrix.script }}"
 
-      # 产品仓库 vendored 的 tools/ossutil 是 mac 二进制，Linux runner 需换成 linux 版
-      - name: Install linux ossutil
-        if: steps.flag.outputs.run == 'true' && matrix.label == 'linux' && github.event.inputs.upload_oss == 'true'
-        working-directory: ${{ env.SRC_DIR }}
-        shell: bash
-        run: |
-          curl -fsSL https://gosspublic.alicdn.com/ossutil/1.7.16/ossutil64 -o tools/ossutil
-          chmod +x tools/ossutil
-          tools/ossutil --version || true
-
-      - name: Upload to Aliyun OSS
-        if: steps.flag.outputs.run == 'true' && github.event.inputs.upload_oss == 'true'
-        working-directory: ${{ env.SRC_DIR }}
-        shell: bash
-        env:
-          OSS_KEY_ID: ${{ secrets.OSS_KEY_ID }}
-          OSS_KEY_SECRET: ${{ secrets.OSS_KEY_SECRET }}
-        run: bash scripts/upload-oss.sh
+      # OSS 上传 + hub.zsrhkj.com 版本注册改在本地做（Action 内上传太慢）。
+      # Action 只产出 artifact，本地 gh run download 后跑产品 scripts/upload-oss.sh。
 
       - name: Upload build artifacts
         if: steps.flag.outputs.run == 'true'
