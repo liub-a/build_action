@@ -107,7 +107,13 @@ jobs:
       - name: Install WiX (Windows)
         if: steps.flag.outputs.run == 'true' && matrix.label == 'win'
         shell: bash
-        run: dotnet tool install --global wix --version 5.0.2 || true
+        run: |
+          dotnet tool install --global wix --version 5.0.2 || true
+          # build-win.sh 建 MSI + Burn bundle 需要这些扩展，全局注册
+          wix extension add -g WixToolset.Util.wixext/5.0.2 || true
+          wix extension add -g WixToolset.UI.wixext/5.0.2 || true
+          wix extension add -g WixToolset.Bal.wixext/5.0.2 || true
+          wix extension list -g || true
 
       - name: Install Linux packaging tools
         if: steps.flag.outputs.run == 'true' && matrix.label == 'linux'
