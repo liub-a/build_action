@@ -130,6 +130,16 @@ jobs:
         shell: bash
         run: bash "${{ matrix.script }}"
 
+      # 产品仓库 vendored 的 tools/ossutil 是 mac 二进制，Linux runner 需换成 linux 版
+      - name: Install linux ossutil
+        if: steps.flag.outputs.run == 'true' && matrix.label == 'linux' && github.event.inputs.upload_oss == 'true'
+        working-directory: ${{ env.SRC_DIR }}
+        shell: bash
+        run: |
+          curl -fsSL https://gosspublic.alicdn.com/ossutil/1.7.16/ossutil64 -o tools/ossutil
+          chmod +x tools/ossutil
+          tools/ossutil --version || true
+
       - name: Upload to Aliyun OSS
         if: steps.flag.outputs.run == 'true' && github.event.inputs.upload_oss == 'true'
         working-directory: ${{ env.SRC_DIR }}
@@ -148,11 +158,26 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      # workflow_dispatch 无 tag，从 csproj <Version> 取版本生成 tag
+      - name: Resolve version
+        id: ver
+        if: >
+          steps.flag.outputs.run == 'true' &&
+          (startsWith(github.ref, 'refs/tags/') || github.event.inputs.release == 'true')
+        working-directory: ${{ env.SRC_DIR }}
+        shell: bash
+        run: |
+          v=$(grep -oE '<Version>[^<]+</Version>' PdfReader.App/PdfReader.App.csproj | head -1 | sed -E 's/<\/?Version>//g')
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "resolved version: $v"
+
       - name: Attach to GitHub Release
         if: >
           steps.flag.outputs.run == 'true' &&
           (startsWith(github.ref, 'refs/tags/') || github.event.inputs.release == 'true')
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('pdf_reader-v{0}', steps.ver.outputs.version) }}
+          name: pdf_reader ${{ steps.ver.outputs.version }}
           files: ${{ env.SRC_DIR }}/build/publish/**
           fail_on_unmatched_files: false
