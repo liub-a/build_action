@@ -133,7 +133,14 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: pdf_reader-${{ matrix.rid }}
-          path: ${{ env.SRC_DIR }}/build/publish/**
+          # 只收最终安装包，不收解包目录（win-x64/ 等几百个 DLL），大幅减小 artifact
+          path: |
+            ${{ env.SRC_DIR }}/build/publish/*.dmg
+            ${{ env.SRC_DIR }}/build/publish/*.deb
+            ${{ env.SRC_DIR }}/build/publish/*.rpm
+            ${{ env.SRC_DIR }}/build/publish/*.tar.gz
+            ${{ env.SRC_DIR }}/build/publish/win/*Setup.exe
+            ${{ env.SRC_DIR }}/build/publish/win/*.msi
           if-no-files-found: error
           retention-days: 14
 
