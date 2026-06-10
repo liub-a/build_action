@@ -39,6 +39,8 @@ permissions:
 env:
   REPO_PATH: code.zsrhkj.com/zsrhkj/pdf-reader.git
   SRC_DIR: src
+  # 让 Node20 的 action 提前跑在 Node24（2026-06-16 后将成默认）
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   build:
