@@ -167,7 +167,7 @@ jobs:
         working-directory: ${{ env.SRC_DIR }}
         shell: bash
         run: |
-          v=$(grep -oE '<Version>[^<]+</Version>' PdfReader.App/PdfReader.App.csproj | head -1 | sed -E 's/<\/?Version>//g')
+          v=$(grep -oE '<Version>[^<]+</Version>' src/PdfReader.App/PdfReader.App.csproj | head -1 | sed -E 's/<\/?Version>//g')
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "resolved version: $v"
 
