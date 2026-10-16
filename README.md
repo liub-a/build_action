@@ -1,8 +1,9 @@
 # build_action — 多产品聚合构建仓库
 
 统一用 GitHub Actions 构建多个产品。每个产品有**独立代码库**（多在 私有源码仓库），
-本仓库只承载 workflow 与编排：CI 内 clone 产品源码 → 跑产品自带构建脚本 → 上传 OSS / GitHub Release。
+本仓库只承载 workflow 与编排：CI 内 clone 产品源码 → 跑产品自带构建脚本 → 产出安装包 artifact。
 **构建逻辑留在各产品仓库的 `scripts/`，本仓库不复制。**
+OSS 上传与版本登记不在 CI 内做，改在本地执行（见 [docs/接入指南.md](docs/接入指南.md)）。
 
 ## 为什么需要这个仓库
 
@@ -14,11 +15,17 @@
 ```
 build_action/
 ├── .github/workflows/        # 各产品 workflow（文件名带产品前缀，GitHub 要求平铺）
-│   └── pdf_reader.yml
+│   ├── pdf_reader.yml
+│   └── invoice_renamer.yml
 ├── products/                 # 各产品配置 + 说明（实现"按产品分目录"）
-│   └── pdf_reader/
-│       ├── product.env       # 非敏感配置：仓库地址/分支/平台/脚本路径
-│       └── README.md         # 该产品构建说明 + 所需 secrets
+│   ├── pdf_reader/
+│   │   ├── product.env       # 非敏感配置：仓库地址/分支/平台/脚本路径
+│   │   └── README.md         # 该产品构建说明 + 所需 secrets
+│   └── invoice_renamer/
+│       ├── product.env
+│       └── README.md
+├── docs/
+│   └── 接入指南.md           # 新产品接入完整说明（推荐先读这份）
 └── README.md
 ```
 
@@ -34,9 +41,13 @@ build_action/
 
 ## 新增产品
 
-1. 建 `products/<name>/`，写 `product.env`（参考 pdf_reader）+ `README.md`（列所需 secrets）。
+**完整步骤见 [docs/接入指南.md](docs/接入指南.md)**（含 `product.env` 字段表、workflow 模板要点、
+本地发布流程、常见坑，以及 pdf_reader / invoice_renamer 两个参考实现对照）。速览：
+
+1. 建 `products/<name>/`，写 `product.env`（参考 pdf_reader）+ `README.md`（列所需 secrets、产物路径、已知风险）。
 2. 建 `.github/workflows/<name>.yml`（拷 pdf_reader.yml 改：源码仓库地址、build 脚本路径、runner / 工具链；非 .NET 栈改对应 setup 步骤）。
 3. 在仓库 Settings → Secrets 配置该产品所需密钥。
+4. **首次跑先选 `platforms=linux`**（依赖少、无签名环节），跑通再放开 win / mac。
 
 ## 安全说明 ⚠️
 
