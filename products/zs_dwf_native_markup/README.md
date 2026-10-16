@@ -134,6 +134,7 @@ Actions → `build-zs_dwf_native_markup` → Run workflow：
 | 4 | Windows 缺 net48 引用程序集 | 见上，必要时加 `choco install netfx-4.8-devpack -y` |
 | 5 | Windows `wix --version` 不是 5.x | 产品脚本会直接报错退出；workflow 里已固定装 `5.0.2` |
 | 6 | WebView2 引导程序要联网 | `build-installer.bat` 用 curl 从 `go.microsoft.com` 取，CI 需要外网。`release-win.bat`（intl）不需要 |
+| 7 | Windows 安装包内嵌 VC++ 运行库 | 原生库 `zs_dwf_toolkit_native.dll` 的导入表里有 `VCRUNTIME140` / `VCRUNTIME140_1` / `MSVCP140`，而 .NET 8 自包含发布不带这几个 DLL。`VC_redist.x64.exe`（18 MB）已提交进产品仓库 `packaging/windows/prerequisites/`，CI clone 下来就有，**不需要额外步骤、也不需要联网**。只覆盖 `cn` 的品牌安装包；`intl` 走 Tauri 自带的 NSIS，没有装运行库这一步 |
 
 | 平台 | 状态 |
 |------|------|
