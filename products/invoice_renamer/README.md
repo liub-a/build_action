@@ -86,18 +86,24 @@ Actions → `build-invoice_renamer` → Run workflow：
 
 **首次验证建议**：先选 `platforms=linux`（依赖少、无签名环节），跑通 checkout → build → artifact 后再放开 `win`。
 
-## 已知风险（首次运行前请知悉）
+## 已知风险 / 首次接入记录
 
-产品仓库里这两个脚本**都是在 macOS 上编写的，从来没有在真实的 Windows / Linux 上跑过**：
+产品仓库里这两个脚本**最初都是在 macOS 上写的，从没在真实的 Windows / Linux 上跑过**。
+接入过程连撞两个问题，都已修好并写进 [docs/接入指南.md](../../docs/接入指南.md) 当作实例：
 
-| 脚本 | 状态 |
+| # | 现象 | 修复 |
+|---|------|------|
+| 1 | `NU1301: The local source '/Volumes/.../Zs.OfdLite/dist' doesn't exist` | 私有包内置到产品仓库 `nuget-local/`，`NuGet.config` 改相对路径 |
+| 2 | `failed to bundle project: invalid name "发票整理助手"` | Linux 单独覆盖 `productName` 为 ASCII + 自定义 `desktopTemplate` 保留中文菜单名 |
+
+| 平台 | 状态 |
 |------|------|
-| `scripts/build-linux.sh` | 未在 Linux 上运行过；后台已交叉发布验证过 `linux-x64` |
-| `scripts/windows/build-installer.bat` | 整条链路未在 Windows 上运行过（只在 macOS 上验证过安装界面能编译、`.wxs` 能预处理/编译、预览页能点） |
+| Linux | ✅ **已跑通**（run 38848155722）。三个产物下载后逐项验过：deb 的 `Package: invoice-renamer` + 中文桌面项 + 正确的 WebKitGTK 依赖、rpm 的 `Name` 标签与装后脚本、tar.gz 的启动脚本权限与 `backend/` 结构。**但未在真实 Linux 上安装运行过** |
+| Windows | ⏳ 整条链路仍未在 Windows 上验证过（只在 macOS 上验证过安装界面能编译、`.wxs` 能编译、预览页能点） |
 
-所以**第一轮 CI 大概需要来回修几次**，这正是接 CI 的目的。常见可能的坑：
+Windows 首次跑常见可能的坑：
 
-- Windows 缺 net48 引用程序集 → 装 .NET Framework 4.8 Developer Pack（见上）。
+- Windows 缺 net48 引用程序集 → `choco install netfx-4.8-devpack -y`（见上）。
 - Windows 品牌包要求 `wix --version` 是 5.x，装了 6/7 会直接报错。
 - Linux 若 `rpmbuild` 缺失，脚本会自己降级为只出 deb（CI 里已装 `rpm`）。
 - WebView2 引导程序在 Windows job 里临时用 curl 下载（`go.microsoft.com`），CI 需要外网。
