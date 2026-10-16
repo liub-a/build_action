@@ -98,8 +98,10 @@ Actions → `build-invoice_renamer` → Run workflow：
 
 | 平台 | 状态 |
 |------|------|
-| Linux | ✅ **已跑通**（run 38848155722）。三个产物下载后逐项验过：deb 的 `Package: invoice-renamer` + 中文桌面项 + 正确的 WebKitGTK 依赖、rpm 的 `Name` 标签与装后脚本、tar.gz 的启动脚本权限与 `backend/` 结构。**但未在真实 Linux 上安装运行过** |
-| Windows | ⏳ 整条链路仍未在 Windows 上验证过（只在 macOS 上验证过安装界面能编译、`.wxs` 能编译、预览页能点） |
+| Linux | ✅ **CI 已跑通**（run 38848155722）。三个产物下载后逐项验过：deb 的 `Package: invoice-renamer` + 中文桌面项 + 正确的 WebKitGTK 依赖、rpm 的 `Name` 标签与装后脚本、tar.gz 的启动脚本权限与 `backend/` 结构。**但未在真实 Linux 上安装运行过** |
+| Windows | ✅ **CI 一次通过**（run 38848805573）。预案的 net48 Developer Pack 和 WiX 5.x 都没用上。产物 66 MB，SHA256 三方一致，有效 PE32+ x86-64。**但从未在真机装过** |
+
+> 两个平台都是"能构建"，不等于"能用" —— 装机验证还没做。
 
 Windows 首次跑常见可能的坑：
 
