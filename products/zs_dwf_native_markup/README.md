@@ -75,24 +75,32 @@ DWF / DWFx 图纸阅读器：打开图纸、渲染、图层显隐、测量、导
 
 ## 本地发布（OSS + hub 注册）
 
-Action 只打包产出 artifact。OSS 上传与 hub.zsrhkj.com 版本注册在本地做：
+Action 只打包产出 artifact。OSS 上传与 hub.zsrhkj.com 版本注册在本地做。
+产品仓库的 `scripts/ci-build.sh` 把「触发 → 等 → 下载 → 上传 → 登记」串成一条命令，下面两种写法等价：
 
 ```bash
 # 前置：gh 已登录；本机有产品仓库 /Volumes/Private/LB/Zs.DwfNativeMarkup
 #       产品仓库的 scripts/deploy.env 已填好（不进 Git）
 cd /Volumes/Private/LB/Zs.DwfNativeMarkup
 
-# 1) 拉最近一次成功的构建产物
+# 一条命令走完：触发 CI → 等构建 → 下载产物 → 上传 OSS → 登记版本
+bash scripts/ci-build.sh linux --edition intl --upload
+bash scripts/ci-build.sh win   --edition cn   --upload
+
+# 只构建 + 下载、不发布（会打印出该执行的 upload-oss.sh 命令）：
+bash scripts/ci-build.sh all --edition cn
+
+# 不用这个脚本时，手动等价于下面两步：
 RUN=$(gh run list --repo liub-a/build_action --workflow zs_dwf_native_markup.yml \
         --status success -L 1 --json databaseId --jq '.[0].databaseId')
-gh run download "$RUN" --repo liub-a/build_action -D /tmp/dwf-artifacts
+gh run download "$RUN" --repo liub-a/build_action -D artifacts/ci
 
-# 2) 逐个上传 + 登记（平台码必须和客户端 UpdateService 用的一致）
-bash scripts/upload-oss.sh linux-x64-deb /tmp/dwf-artifacts/…/bundle/deb/*.deb
-bash scripts/upload-oss.sh linux-x64-rpm /tmp/dwf-artifacts/…/bundle/rpm/*.rpm
-bash scripts/upload-oss.sh linux-x64-tar /tmp/dwf-artifacts/…/bundle/tar/*.tar.gz
+# 逐个上传 + 登记（平台码必须和客户端 UpdateService 用的一致）
+bash scripts/upload-oss.sh linux-x64-deb artifacts/ci/…/bundle/deb/*.deb
+bash scripts/upload-oss.sh linux-x64-rpm artifacts/ci/…/bundle/rpm/*.rpm
+bash scripts/upload-oss.sh linux-x64-tar artifacts/ci/…/bundle/tar/*.tar.gz
 bash scripts/upload-oss.sh win-x64 \
-     /tmp/dwf-artifacts/…/windows-installer/<版本>/ZsDwfReader-Setup-<版本>.exe
+     artifacts/ci/…/windows-installer/<版本>/ZsDwfReader-Setup-<版本>.exe
 
 # 只上传不登记：加 --skip-publish；只打印不执行：先加 --dry-run
 ```
@@ -129,8 +137,7 @@ Actions → `build-zs_dwf_native_markup` → Run workflow：
 
 | 平台 | 状态 |
 |------|------|
-| Linux | ⏳ **尚未跑过 CI**。产品脚本在 macOS 上写的，从没在 Linux 上运行过 |
-| Windows | ⏳ **尚未跑过 CI**。两个 .bat 同样从未在 Windows 上运行过 |
+| Linux | ✅ 已跑通，两个版本都过（2026-10-16）：`intl` run 38868201246（4m0s）、`cn` run 38871956703（4m7s），deb / rpm / 便携 tar.gz 齐全。cn 包拆开验过：`Package: zs-dwf-reader` 是 ASCII、`.desktop` 的 `Name` 仍是「智数 DWF 阅读器」 |
+| Windows | ⏳ **尚未跑过 CI**。两个 .bat 从未在 Windows 上运行过，失败是预期内的，按上表排查 |
 
-> 产品仓库 `scripts/README.md` 的「现状」一节记的是同一件事：Linux / Windows 的打包脚本都还没在
-> 对应系统上真跑过。首次 CI 失败是预期内的，按上表排查。
+> 产品仓库 `scripts/README.md` 的「现状」一节记的是同一件事。
