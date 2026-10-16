@@ -1,0 +1,220 @@
+name: build-zs_dwf_native_markup
+
+# 聚合构建仓库的 zs_dwf_native_markup workflow。
+# 源码在私有仓库 (https://code.zsrhkj.com/zsrhkj/Zs.DwfNativeMarkup.git)，CI 内用 token clone，
+# 然后跑产品自带的构建脚本，最后产出 artifact。
+# 构建逻辑不在本仓库，全部留在产品仓库 scripts/ 里。
+#
+# 技术栈与 invoice_renamer 同构：Tauri 外壳（Rust + 系统 WebView）+ C# 后台（.NET 8 自包含）+ 静态前端。
+#   Linux：ubuntu runner（24.04）自带 WebKitGTK 4.1，补 apt 依赖即可；出 deb / rpm / tar.gz。
+#   Windows：跑产品自带的 WiX 品牌安装包脚本（.bat），另需 WiX 5.0.2。
+#
+# 本产品比 invoice_renamer 多一层：一套代码两个版本（cn 中国专版 / intl 国际版），用 EDITION 环境变量切换，
+# 产品脚本自己读。注意 Windows 上两个版本的脚本不同（见下方 Build (windows) 两步）。
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "产品仓库分支/标签 (默认 master)"
+        required: false
+        default: master
+      platforms:
+        description: "构建平台 (all / win / linux)"
+        required: false
+        default: all
+        type: choice
+        options: [all, win, linux]
+      edition:
+        description: "产品版本 (cn 中国专版 / intl 国际版)"
+        required: false
+        default: cn
+        type: choice
+        options: [cn, intl]
+      release:
+        description: "是否附到 GitHub Release"
+        required: false
+        default: false
+        type: boolean
+
+# 仅 release 时需要写权限
+permissions:
+  contents: write
+
+env:
+  REPO_PATH: code.zsrhkj.com/zsrhkj/Zs.DwfNativeMarkup.git
+  SRC_DIR: src
+  # 产品脚本（scripts/edition.sh、release-win.bat）读这个变量切版本；空值在 cmd 里会被当未定义，
+  # 所以这里兜一个默认值，不要留空。
+  EDITION: ${{ github.event.inputs.edition || 'cn' }}
+  # 让 Node20 的 action 提前跑在 Node24（与 pdf_reader / invoice_renamer 保持一致）
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  build:
+    name: build (${{ matrix.label }}, ${{ github.event.inputs.edition || 'cn' }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS 暂不发布：10 倍计费，且 Zs.DWFToolkit 包缺 osx-x64 的 native。
+          # 要出 mac 包再加 macos-latest + bash scripts/release-mac.sh。
+          - label: linux
+            os: ubuntu-latest
+            rid: linux-x64
+          - label: win
+            os: windows-latest
+            rid: win-x64
+
+    steps:
+      # 平台过滤：platforms != all 且 != 当前 label 时跳过整个 job 的后续步骤
+      - name: Resolve run flag
+        id: flag
+        shell: bash
+        run: |
+          want='${{ github.event.inputs.platforms }}'
+          [ -z "$want" ] && want=all
+          if [ "$want" = "all" ] || [ "$want" = "${{ matrix.label }}" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "skip ${{ matrix.label }} (selected: $want)"
+          fi
+
+      # Checkout 私有产品源码。
+      # 用 git credential helper 把 token 写入内存，避免内嵌进 remote URL（不进进程列表/日志）。
+      - name: Checkout product source
+        if: steps.flag.outputs.run == 'true'
+        shell: bash
+        env:
+          REPO_USER: ${{ secrets.REPO_USER }}
+          REPO_TOKEN: ${{ secrets.REPO_TOKEN }}
+          REF: ${{ github.event.inputs.ref }}
+        run: |
+          set -euo pipefail
+          ref="${REF:-master}"
+          git -c credential.helper= \
+              -c credential.helper='!f() { echo "username=$REPO_USER"; echo "password=$REPO_TOKEN"; }; f' \
+              clone --depth 1 -b "$ref" \
+              "https://${REPO_PATH}" "$SRC_DIR"
+          echo "cloned ref=$ref (edition=$EDITION)"
+
+      - name: Setup .NET 8
+        if: steps.flag.outputs.run == 'true'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      # npx @tauri-apps/cli@2（打包外壳）和 scripts/windows/release-tool.mjs（WiX 安装包的版本号/元数据）都要 node
+      - name: Setup Node
+        if: steps.flag.outputs.run == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup Rust
+        if: steps.flag.outputs.run == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+          rustc -V && cargo -V
+
+      # Tauri 外壳链接系统 WebKitGTK，ubuntu-latest（24.04）有 4.1，装开发包即可。
+      # rpm 提供 rpmbuild，缺了产品脚本会自己跳过 rpm 包。
+      - name: Install Linux build deps
+        if: steps.flag.outputs.run == 'true' && matrix.label == 'linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libssl-dev libsoup-3.0-dev \
+            build-essential curl file patchelf rpm
+
+      # 品牌安装包用 WiX 5.0.2（Burn bundle + MSI）。必须是 5.x：产品脚本会检查大版本，6/7 直接报错。
+      # Bal/Util 扩展由产品脚本自己装到 artifacts/wix 下，这里不用 -g 装。
+      - name: Install WiX 5.0.2
+        if: steps.flag.outputs.run == 'true' && matrix.label == 'win' && env.EDITION == 'cn'
+        shell: bash
+        run: |
+          dotnet tool install --global wix --version 5.0.2 || true
+          export PATH="$PATH:$USERPROFILE/.dotnet/tools"
+          wix --version
+
+      # 产品脚本自己会：发布后台 → tauri build → 出 deb + rpm + 便携 tar.gz。
+      # EDITION 环境变量由产品仓库的 scripts/edition.sh 读取，决定产品名/包标识/语言。
+      - name: Build (linux)
+        if: steps.flag.outputs.run == 'true' && matrix.label == 'linux'
+        working-directory: ${{ env.SRC_DIR }}
+        shell: bash
+        run: bash scripts/build-linux.sh
+
+      # cn：产品自带的 WiX 品牌安装包（自绘 net48 界面 + 顺带装 WebView2）。
+      # 它会自己发布后台、构建桌面程序（--no-bundle），最后出 ZsDwfReader-Setup-<版本>.exe。
+      - name: Build (windows, cn 品牌安装包)
+        if: steps.flag.outputs.run == 'true' && matrix.label == 'win' && env.EDITION == 'cn'
+        working-directory: ${{ env.SRC_DIR }}
+        shell: cmd
+        run: scripts\windows\build-installer.bat
+
+      # intl：品牌安装包的界面只有中文，国际版改用 Tauri 自带的英文 NSIS 安装包。
+      # release-win.bat 同样读 EDITION，会走 --features intl --config tauri.intl.conf.json。
+      - name: Build (windows, intl NSIS)
+        if: steps.flag.outputs.run == 'true' && matrix.label == 'win' && env.EDITION != 'cn'
+        working-directory: ${{ env.SRC_DIR }}
+        shell: cmd
+        run: scripts\release-win.bat
+
+      # OSS 上传 + hub.zsrhkj.com 版本注册改在本地做（与其它产品一致，CI 上传太慢）。
+      # Action 只产出 artifact，本地 gh run download 后再跑产品的 scripts/upload-oss.sh。
+      - name: Upload build artifacts
+        if: steps.flag.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: zs_dwf_native_markup-${{ matrix.rid }}-${{ env.EDITION }}
+          # 只收最终安装包，不收 target/release 下的解包目录和逐平台 pub 目录
+          path: |
+            ${{ env.SRC_DIR }}/src/Zs.DwfNativeMarkup.Desktop/src-tauri/target/release/bundle/deb/*.deb
+            ${{ env.SRC_DIR }}/src/Zs.DwfNativeMarkup.Desktop/src-tauri/target/release/bundle/rpm/*.rpm
+            ${{ env.SRC_DIR }}/src/Zs.DwfNativeMarkup.Desktop/src-tauri/target/release/bundle/tar/*.tar.gz
+            ${{ env.SRC_DIR }}/src/Zs.DwfNativeMarkup.Desktop/src-tauri/target/release/bundle/nsis/*-setup.exe
+            ${{ env.SRC_DIR }}/src/Zs.DwfNativeMarkup.Desktop/src-tauri/target/release/bundle/msi/*.msi
+            ${{ env.SRC_DIR }}/artifacts/windows-installer/*/ZsDwfReader-Setup-*.exe
+            ${{ env.SRC_DIR }}/artifacts/windows-installer/*/installer-release.json
+            ${{ env.SRC_DIR }}/artifacts/windows-installer/*/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
+
+      # workflow_dispatch 无 tag，从 tauri.conf.json 取版本生成 tag
+      - name: Resolve version
+        id: ver
+        if: >
+          steps.flag.outputs.run == 'true' &&
+          (startsWith(github.ref, 'refs/tags/') || github.event.inputs.release == 'true')
+        working-directory: ${{ env.SRC_DIR }}
+        shell: bash
+        run: |
+          v=$(sed -nE 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' \
+                src/Zs.DwfNativeMarkup.Desktop/src-tauri/tauri.conf.json | head -1)
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "resolved version: $v"
+
+      # tag 带版本名：两个版本可能同步发同一个版本号，不带会撞。
+      - name: Attach to GitHub Release
+        if: >
+          steps.flag.outputs.run == 'true' &&
+          (startsWith(github.ref, 'refs/tags/') || github.event.inputs.release == 'true')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('zs_dwf_native_markup-{0}-v{1}', env.EDITION, steps.ver.outputs.version) }}
+          name: zs_dwf_native_markup ${{ env.EDITION }} ${{ steps.ver.outputs.version }}
+          files: |
+            ${{ env.SRC_DIR }}/src/Zs.DwfNativeMarkup.Desktop/src-tauri/target/release/bundle/deb/*.deb
+            ${{ env.SRC_DIR }}/src/Zs.DwfNativeMarkup.Desktop/src-tauri/target/release/bundle/rpm/*.rpm
+            ${{ env.SRC_DIR }}/src/Zs.DwfNativeMarkup.Desktop/src-tauri/target/release/bundle/tar/*.tar.gz
+            ${{ env.SRC_DIR }}/src/Zs.DwfNativeMarkup.Desktop/src-tauri/target/release/bundle/nsis/*-setup.exe
+            ${{ env.SRC_DIR }}/artifacts/windows-installer/*/ZsDwfReader-Setup-*.exe
+          fail_on_unmatched_files: false

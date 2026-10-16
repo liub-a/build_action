@@ -16,12 +16,16 @@ OSS 上传与版本登记不在 CI 内做，改在本地执行（见 [docs/接�
 build_action/
 ├── .github/workflows/        # 各产品 workflow（文件名带产品前缀，GitHub 要求平铺）
 │   ├── pdf_reader.yml
-│   └── invoice_renamer.yml
+│   ├── invoice_renamer.yml
+│   └── zs_dwf_native_markup.yml
 ├── products/                 # 各产品配置 + 说明（实现"按产品分目录"）
 │   ├── pdf_reader/
 │   │   ├── product.env       # 非敏感配置：仓库地址/分支/平台/脚本路径
 │   │   └── README.md         # 该产品构建说明 + 所需 secrets
-│   └── invoice_renamer/
+│   ├── invoice_renamer/
+│   │   ├── product.env
+│   │   └── README.md
+│   └── zs_dwf_native_markup/
 │       ├── product.env
 │       └── README.md
 ├── docs/
@@ -38,6 +42,7 @@ build_action/
 |------|--------|------|------|
 | pdf_reader | .NET 8 / Avalonia | win / mac / linux | [products/pdf_reader](products/pdf_reader/README.md) |
 | invoice_renamer | Tauri (Rust) + .NET 8 + 静态前端 | win / linux | [products/invoice_renamer](products/invoice_renamer/README.md) |
+| zs_dwf_native_markup | Tauri (Rust) + .NET 8 + 静态前端 | win / linux（cn + intl 两版本） | [products/zs_dwf_native_markup](products/zs_dwf_native_markup/README.md) |
 
 ## 新增产品
 
