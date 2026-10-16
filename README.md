@@ -30,6 +30,7 @@ build_action/
 | 产品 | 技术栈 | 平台 | 说明 |
 |------|--------|------|------|
 | pdf_reader | .NET 8 / Avalonia | win / mac / linux | [products/pdf_reader](products/pdf_reader/README.md) |
+| invoice_renamer | Tauri (Rust) + .NET 8 + 静态前端 | win / linux | [products/invoice_renamer](products/invoice_renamer/README.md) |
 
 ## 新增产品
 
