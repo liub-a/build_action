@@ -124,6 +124,8 @@ jobs:
 
       # Tauri 外壳链接系统 WebKitGTK，ubuntu-latest（24.04）有 4.1，装开发包即可。
       # rpm 提供 rpmbuild，缺了产品脚本会自己跳过 rpm 包。
+      # mono-devel：Obfuscar 只发 Windows 的 .exe，Linux 上靠 mono 跑（见 Host.csproj 的 Obfuscate 目标，
+      # 缺了它会直接让构建失败 —— 这是有意的，静默发出未混淆的包比构建失败糟糕得多）。
       - name: Install Linux build deps
         if: steps.flag.outputs.run == 'true' && matrix.label == 'linux'
         shell: bash
@@ -132,7 +134,7 @@ jobs:
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
             librsvg2-dev libssl-dev libsoup-3.0-dev \
-            build-essential curl file patchelf rpm
+            build-essential curl file patchelf rpm mono-devel
 
       # 品牌安装包用 WiX 5.0.2（Burn bundle + MSI）。必须是 5.x：产品脚本会检查大版本，6/7 直接报错。
       # Bal/Util 扩展由产品脚本自己装到 artifacts/wix 下，这里不用 -g 装。
