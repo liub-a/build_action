@@ -6,13 +6,17 @@
 + **React 前端**（`src/Zs.PdfFormatConverter.Desktop/src`）。
 技术栈与 invoice_renamer 同构。
 
-- **源码**：`https://code.zsrhkj.com/zsrhkj/Zs.PdfFormatConverter.git`（分支 `master`）
+- **源码**：`https://code.zsrhkj.com/zsrhkj/Zs.PdfFormatConverter.git`（分支 `main`）
 - **Workflow**：[`.github/workflows/zs_pdf_format_converter.yml`](../../.github/workflows/zs_pdf_format_converter.yml)
 - **平台**：Windows x64、Linux x64
 - **版本来源**：`src/Zs.PdfFormatConverter.Desktop/src-tauri/tauri.conf.json` 的 `version`
 
 > **macOS 不在 matrix 里**：macos runner 是 10 倍计费。
 > 要出 mac 包时加 `macos-latest` + `bash scripts/release-mac.sh`。
+
+> **前置条件**：Gitea 上必须先有 `Zs.PdfFormatConverter` 仓库，且默认分支是 `main`。
+> 仓库不存在时 workflow 的 clone 步骤就会失败（`repository not found`）。
+> 本产品的默认分支用 `main`，与 invoice_renamer 的 `master` 不同 —— 触发时不传 `ref` 就用 `main`。
 
 ## 产物路径
 
@@ -91,7 +95,7 @@ Actions → `build-zs_pdf_format_converter` → Run workflow：
 
 | 输入 | 说明 |
 |------|------|
-| `ref` | 产品仓库分支/标签，默认 `master` |
+| `ref` | 产品仓库分支/标签，默认 `main` |
 | `platforms` | `all` / `win` / `linux` |
 | `release` | 是否附到 GitHub Release（tag 形如 `zs_pdf_format_converter-v<版本>`） |
 

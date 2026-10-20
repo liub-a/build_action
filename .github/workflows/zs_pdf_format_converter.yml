@@ -16,9 +16,9 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "产品仓库分支/标签 (默认 master)"
+        description: "产品仓库分支/标签 (默认 main)"
         required: false
-        default: master
+        default: main
       platforms:
         description: "构建平台 (all / win / linux)"
         required: false
@@ -83,7 +83,7 @@ jobs:
           REF: ${{ github.event.inputs.ref }}
         run: |
           set -euo pipefail
-          ref="${REF:-master}"
+          ref="${REF:-main}"
           git -c credential.helper= \
               -c credential.helper='!f() { echo "username=$REPO_USER"; echo "password=$REPO_TOKEN"; }; f' \
               clone --depth 1 -b "$ref" \
