@@ -1,0 +1,267 @@
+name: build-zs_dwf_toolkit
+
+# 聚合构建仓库的 zs_dwf_toolkit workflow。
+# 源码在私有仓库 (https://code.zsrhkj.com/zsrhkj/Zs.DWFToolkit.git)，CI 内用 token clone，
+# 然后跑产品自带的 scripts/build-native-release.sh（各 RID 的原生库 + worker），
+# 最后把各平台产物汇总成一个 NuGet 包（lib net8.0 + runtimes/<rid>/native）。
+# 构建逻辑不在本仓库，全部留在产品仓库 scripts/ 里。
+#
+# 平台：linux-x64 / linux-arm64（manylinux2014, glibc 2.17）/ win-x64。
+# macOS 不在 matrix：macos runner 10 倍计费；仓库里已提交的 osx-arm64 / osx-x64 原生库照常打进包
+# （osx-x64 在 Apple Silicon 上交叉编译，见产品仓库 native-prebuilt/README.md）。
+#
+# 本地入口：产品仓库的 scripts/ci-build.sh（触发 → 等待 → 下载产物）。
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "产品仓库分支/标签 (默认 master)"
+        required: false
+        default: master
+      platforms:
+        description: "构建平台 (all / linux / win)"
+        required: false
+        default: all
+        type: choice
+        options: [all, linux, win]
+      release:
+        description: "是否把 .nupkg 附到 GitHub Release"
+        required: false
+        default: false
+        type: boolean
+
+# 仅 release 时需要写权限
+permissions:
+  contents: write
+
+env:
+  REPO_PATH: code.zsrhkj.com/zsrhkj/Zs.DWFToolkit.git
+  SRC_DIR: src
+  # 让 Node20 的 action 提前跑在 Node24（与其它产品保持一致）
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  native:
+    name: native (${{ matrix.rid }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: linux
+            runner: ubuntu-latest
+            rid: linux-x64
+            image: quay.io/pypa/manylinux2014_x86_64
+          - label: linux
+            runner: ubuntu-24.04-arm
+            rid: linux-arm64
+            image: quay.io/pypa/manylinux2014_aarch64
+          - label: win
+            runner: windows-latest
+            rid: win-x64
+            image: ""
+
+    steps:
+      # 平台过滤：platforms != all 且 != 当前 label 时跳过整个 job 的后续步骤
+      - name: Resolve run flag
+        id: flag
+        shell: bash
+        run: |
+          want='${{ github.event.inputs.platforms }}'
+          [ -z "$want" ] && want=all
+          if [ "$want" = "all" ] || [ "$want" = "${{ matrix.label }}" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "skip ${{ matrix.rid }} (selected: $want)"
+          fi
+
+      # Checkout 私有产品源码。
+      # 用 git credential helper 把 token 写入内存，避免内嵌进 remote URL（不进进程列表/日志）。
+      - name: Checkout product source
+        if: steps.flag.outputs.run == 'true'
+        shell: bash
+        env:
+          REPO_USER: ${{ secrets.REPO_USER }}
+          REPO_TOKEN: ${{ secrets.REPO_TOKEN }}
+          REF: ${{ github.event.inputs.ref }}
+        run: |
+          set -euo pipefail
+          ref="${REF:-master}"
+          git -c credential.helper= \
+              -c credential.helper='!f() { echo "username=$REPO_USER"; echo "password=$REPO_TOKEN"; }; f' \
+              clone --depth 1 -b "$ref" \
+              "https://${REPO_PATH}" "$SRC_DIR"
+          echo "cloned ref=$ref"
+
+      - name: Setup .NET 8
+        if: steps.flag.outputs.run == 'true'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      # 宿主侧解包 ODA 源码；容器里只编译，避免在老 glibc 容器里再解一遍。
+      - name: Import ODA-modified DWF Toolkit source (linux)
+        if: steps.flag.outputs.run == 'true' && matrix.label == 'linux'
+        working-directory: ${{ env.SRC_DIR }}
+        shell: bash
+        run: ./scripts/setup-oda-dwftoolkit.sh
+
+      # manylinux2014 = glibc 2.17：在 ubuntu-24.04（glibc 2.38）上编出来的 .so 在老服务器上加载失败。
+      # 不用 job 级 container:，因为 actions/checkout 的 node20 需要 glibc 2.28；
+      # checkout 与解包在宿主跑，只有编译/测试进老 glibc 容器。
+      - name: Build + native tests (linux, manylinux2014)
+        if: steps.flag.outputs.run == 'true' && matrix.label == 'linux'
+        shell: bash
+        run: |
+          docker run --rm -v "$PWD/$SRC_DIR":/src -w /src ${{ matrix.image }} bash -c '
+            set -euo pipefail
+            export ZS_RID=${{ matrix.rid }}
+            export ZS_JOBS=2              # 每个 WhipTk TU 要数 GB 内存，-j 不设上限会 OOM 掉 runner
+            export ZS_RUN_TESTS=1         # 编译并跑 CTest（fixtures 已提交，不联网）
+            export ZS_PREFER_SYSTEM_JPEG=OFF
+            bash scripts/build-native-release.sh
+          '
+
+      # 产品脚本自己导入 ODA 源码、配置、编译、并把产物 stage 到 native-prebuilt/<rid>/。
+      - name: Build (windows)
+        if: steps.flag.outputs.run == 'true' && matrix.label == 'win'
+        working-directory: ${{ env.SRC_DIR }}
+        shell: bash
+        env:
+          ZS_RID: win-x64
+          ZS_JOBS: 2
+        run: |
+          ./scripts/setup-oda-dwftoolkit.sh
+          bash scripts/build-native-release.sh
+
+      # artifact 名就是 RID：package job 直接下载到 native-prebuilt/ 下按名字落位。
+      - name: Upload native artifacts
+        if: steps.flag.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.rid }}
+          path: ${{ env.SRC_DIR }}/native-prebuilt/${{ matrix.rid }}/
+          if-no-files-found: error
+          retention-days: 14
+
+  package:
+    name: package (managed tests + NuGet)
+    needs: native
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout product source
+        shell: bash
+        env:
+          REPO_USER: ${{ secrets.REPO_USER }}
+          REPO_TOKEN: ${{ secrets.REPO_TOKEN }}
+          REF: ${{ github.event.inputs.ref }}
+        run: |
+          set -euo pipefail
+          ref="${REF:-master}"
+          git -c credential.helper= \
+              -c credential.helper='!f() { echo "username=$REPO_USER"; echo "password=$REPO_TOKEN"; }; f' \
+              clone --depth 1 -b "$ref" \
+              "https://${REPO_PATH}" "$SRC_DIR"
+          echo "cloned ref=$ref"
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      # 每个 artifact 下载到 src/native-prebuilt/<artifact 名>/，正好覆盖对应的 RID 目录。
+      # 没参与本次构建的 RID（例如只跑 platforms=linux 时的 win-x64）沿用仓库里已提交的 prebuilt。
+      - name: Download native artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: '*'
+          path: ${{ env.SRC_DIR }}/native-prebuilt
+
+      - name: Managed build + tests
+        working-directory: ${{ env.SRC_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet restore Zs.DWFToolkit.slnx
+          dotnet test Zs.DWFToolkit.slnx --configuration Release --no-restore \
+            --logger "trx;LogFileName=test-results.trx" \
+            --results-directory ./TestResults
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: ${{ env.SRC_DIR }}/TestResults
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Pack
+        working-directory: ${{ env.SRC_DIR }}
+        shell: bash
+        run: dotnet pack src/Zs.DWFToolkit/Zs.DWFToolkit.csproj --configuration Release -o artifacts/nuget
+
+      # 回归护栏：worker 和一个 .so 同目录发布，加载器必须靠 RPATH=$ORIGIN 找到它，
+      # 而不是靠编译机的绝对构建路径（打包后那个路径已经不存在了）。
+      - name: Smoke-test packaged worker (linux-x64)
+        if: github.event.inputs.platforms != 'win'
+        working-directory: ${{ env.SRC_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          cp native-prebuilt/linux-x64/* "$tmp"/
+          out="$(cd /tmp && "$tmp/zs_dwf_worker" 2>&1 || true)"
+          echo "$out"
+          # 加载失败时 main 根本没跑，只有 loader 的 "cannot open shared object file"
+          grep -q "usage:" <<<"$out" || { echo "worker cannot load its sibling .so" >&2; exit 1; }
+
+      # 原生库是按 RID 条件打包的，路径写错时 dotnet pack 会静默跳过 —— 这里必须验一遍。
+      - name: Verify native payload in the package
+        working-directory: ${{ env.SRC_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          pkg="$(ls artifacts/nuget/*.nupkg)"
+          echo "package: $pkg"
+          for rid in linux-x64 linux-arm64 win-x64 osx-arm64 osx-x64; do
+            if unzip -l "$pkg" | grep -q "runtimes/$rid/native/"; then
+              echo "  ok $rid"
+            else
+              echo "  MISSING $rid" >&2
+              exit 1
+            fi
+          done
+          unzip -l "$pkg" | grep 'runtimes/' >&2
+
+      - name: Upload NuGet package
+        uses: actions/upload-artifact@v4
+        with:
+          name: nuget
+          path: ${{ env.SRC_DIR }}/artifacts/nuget/
+          if-no-files-found: error
+          retention-days: 14
+
+      # workflow_dispatch 无 tag：从 csproj 的 <Version> 生成 tag
+      - name: Resolve version
+        id: ver
+        if: github.event.inputs.release == 'true'
+        working-directory: ${{ env.SRC_DIR }}
+        shell: bash
+        run: |
+          v=$(grep -oE '<Version>[^<]+</Version>' src/Zs.DWFToolkit/Zs.DWFToolkit.csproj | head -1 | sed -E 's/<\/?Version>//g')
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "resolved version: $v"
+
+      - name: Attach to GitHub Release
+        if: github.event.inputs.release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: zs_dwf_toolkit-v${{ steps.ver.outputs.version }}
+          name: zs_dwf_toolkit ${{ steps.ver.outputs.version }}
+          files: |
+            ${{ env.SRC_DIR }}/artifacts/nuget/*.nupkg
+            ${{ env.SRC_DIR }}/artifacts/nuget/*.snupkg
+          fail_on_unmatched_files: false

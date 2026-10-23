@@ -43,7 +43,7 @@ build_action/
 | pdf_reader | .NET 8 / Avalonia | win / mac / linux | [products/pdf_reader](products/pdf_reader/README.md) |
 | invoice_renamer | Tauri (Rust) + .NET 8 + 静态前端 | win / linux | [products/invoice_renamer](products/invoice_renamer/README.md) |
 | zs_dwf_native_markup | Tauri (Rust) + .NET 8 + 静态前端 | win / linux（cn + intl 两版本） | [products/zs_dwf_native_markup](products/zs_dwf_native_markup/README.md) |
-| zs_pdf_format_converter | Tauri (Rust) + .NET 8 + React 前端 | win / linux | [products/zs_pdf_format_converter](products/zs_pdf_format_converter/README.md) |
+| zs_dwf_toolkit | .NET 8 库 + C++ 原生渲染器 | linux-x64 / linux-arm64 / win-x64 | [products/zs_dwf_toolkit](products/zs_dwf_toolkit/README.md) |
 
 ## 新增产品
 
