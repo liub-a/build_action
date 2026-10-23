@@ -136,10 +136,11 @@ jobs:
             librsvg2-dev libssl-dev libsoup-3.0-dev \
             build-essential curl file patchelf rpm mono-devel
 
-      # 品牌安装包用 WiX 5.0.2（Burn bundle + MSI）。必须是 5.x：产品脚本会检查大版本，6/7 直接报错。
+      # 品牌安装包用 WiX 5.0.2（Burn bundle + MSI），cn / intl 两个版本都要。
+      # 必须是 5.x：产品脚本会检查大版本，6/7 直接报错。
       # Bal/Util 扩展由产品脚本自己装到 artifacts/wix 下，这里不用 -g 装。
       - name: Install WiX 5.0.2
-        if: steps.flag.outputs.run == 'true' && matrix.label == 'win' && env.EDITION == 'cn'
+        if: steps.flag.outputs.run == 'true' && matrix.label == 'win'
         shell: bash
         run: |
           dotnet tool install --global wix --version 5.0.2 || true
