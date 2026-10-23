@@ -11,7 +11,7 @@ runtimes/<rid>/native/zs_dwf_worker[.exe]
 
 - **源码**：`https://code.zsrhkj.com/zsrhkj/Zs.DWFToolkit.git`（分支 `master`）
 - **Workflow**：[`.github/workflows/zs_dwf_toolkit.yml`](../../.github/workflows/zs_dwf_toolkit.yml)
-- **平台**：linux-x64、linux-arm64、win-x64（原生库）；osx-arm64 用仓库里已提交的 prebuilt
+- **平台**：linux-x64、linux-arm64、win-x64（CI 构建）；osx-arm64、osx-x64 用产品仓库本机构建并提交的 prebuilt
 - **版本来源**：`src/Zs.DWFToolkit/Zs.DWFToolkit.csproj` 的 `<Version>`
 
 ## 两个 job

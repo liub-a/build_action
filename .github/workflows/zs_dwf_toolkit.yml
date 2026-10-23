@@ -7,8 +7,8 @@ name: build-zs_dwf_toolkit
 # 构建逻辑不在本仓库，全部留在产品仓库 scripts/ 里。
 #
 # 平台：linux-x64 / linux-arm64（manylinux2014, glibc 2.17）/ win-x64。
-# macOS 不在 matrix：macos runner 10 倍计费；仓库里已提交的 osx-arm64 原生库照常打进包，
-# osx-x64 没有原生库（csproj 每项都是 Exists 条件，缺了就跳过）。
+# macOS 不在 matrix：macos runner 10 倍计费；仓库里已提交的 osx-arm64 / osx-x64 原生库照常打进包
+# （osx-x64 在 Apple Silicon 上交叉编译，见产品仓库 native-prebuilt/README.md）。
 #
 # 本地入口：产品仓库的 scripts/ci-build.sh（触发 → 等待 → 下载产物）。
 
@@ -226,7 +226,7 @@ jobs:
           set -euo pipefail
           pkg="$(ls artifacts/nuget/*.nupkg)"
           echo "package: $pkg"
-          for rid in linux-x64 linux-arm64 win-x64 osx-arm64; do
+          for rid in linux-x64 linux-arm64 win-x64 osx-arm64 osx-x64; do
             if unzip -l "$pkg" | grep -q "runtimes/$rid/native/"; then
               echo "  ok $rid"
             else
