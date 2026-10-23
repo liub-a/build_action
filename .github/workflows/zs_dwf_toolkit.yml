@@ -203,6 +203,21 @@ jobs:
         shell: bash
         run: dotnet pack src/Zs.DWFToolkit/Zs.DWFToolkit.csproj --configuration Release -o artifacts/nuget
 
+      # 回归护栏：worker 和一个 .so 同目录发布，加载器必须靠 RPATH=$ORIGIN 找到它，
+      # 而不是靠编译机的绝对构建路径（打包后那个路径已经不存在了）。
+      - name: Smoke-test packaged worker (linux-x64)
+        if: github.event.inputs.platforms != 'win'
+        working-directory: ${{ env.SRC_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          cp native-prebuilt/linux-x64/* "$tmp"/
+          out="$(cd /tmp && "$tmp/zs_dwf_worker" 2>&1 || true)"
+          echo "$out"
+          # 加载失败时 main 根本没跑，只有 loader 的 "cannot open shared object file"
+          grep -q "usage:" <<<"$out" || { echo "worker cannot load its sibling .so" >&2; exit 1; }
+
       # 原生库是按 RID 条件打包的，路径写错时 dotnet pack 会静默跳过 —— 这里必须验一遍。
       - name: Verify native payload in the package
         working-directory: ${{ env.SRC_DIR }}
