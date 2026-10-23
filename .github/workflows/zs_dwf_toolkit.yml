@@ -158,7 +158,7 @@ jobs:
           # 最关键的一条：不带调试器直接跑，看真实退出码。之前 0xC0000409 是冒烟测试用
           # 仓库里已提交的旧 DLL 跑出来的，这个新编出来的 DLL 未必同样崩法。
           echo "--- 直接跑真实 DWF（无调试器）"
-          "$W" info tests/data/blocks_and_tables.dwf > direct.txt 2>&1; echo "  rc=$?"; head -20 direct.txt
+          "$W" info tests/data/blocks_and_tables.dwf > direct.txt 2>&1; echo "  rc=$?"; head -40 direct.txt
 
           CDB="/c/Program Files (x86)/Windows Kits/10/Debuggers/x64/cdb.exe"
           # 带上 PDB，栈帧才是真实函数名；否则 cdb 只能猜最近的导出符号（上一次就是这样）。
