@@ -162,9 +162,10 @@ jobs:
         shell: cmd
         run: scripts\windows\build-installer.bat
 
-      # intl：品牌安装包的界面只有中文，国际版改用 Tauri 自带的英文 NSIS 安装包。
-      # release-win.bat 同样读 EDITION，会走 --features intl --config tauri.intl.conf.json。
-      - name: Build (windows, intl NSIS)
+      # intl：同一条 WiX 品牌安装包管道，只是 EDITION=intl —— 英文界面、产品名 Zs DWF Reader、
+      # 独立 UpgradeCode / 安装目录（可与中文版同机并存），产物在 artifacts/windows-installer/intl/。
+      # release-win.bat 会走 --features intl --config tauri.intl.conf.json。
+      - name: Build (windows, intl 品牌安装包)
         if: steps.flag.outputs.run == 'true' && matrix.label == 'win' && env.EDITION != 'cn'
         working-directory: ${{ env.SRC_DIR }}
         shell: cmd
@@ -182,11 +183,9 @@ jobs:
             ${{ env.SRC_DIR }}/src/Zs.DwfNativeMarkup.Desktop/src-tauri/target/release/bundle/deb/*.deb
             ${{ env.SRC_DIR }}/src/Zs.DwfNativeMarkup.Desktop/src-tauri/target/release/bundle/rpm/*.rpm
             ${{ env.SRC_DIR }}/src/Zs.DwfNativeMarkup.Desktop/src-tauri/target/release/bundle/tar/*.tar.gz
-            ${{ env.SRC_DIR }}/src/Zs.DwfNativeMarkup.Desktop/src-tauri/target/release/bundle/nsis/*-setup.exe
-            ${{ env.SRC_DIR }}/src/Zs.DwfNativeMarkup.Desktop/src-tauri/target/release/bundle/msi/*.msi
-            ${{ env.SRC_DIR }}/artifacts/windows-installer/*/ZsDwfReader-Setup-*.exe
-            ${{ env.SRC_DIR }}/artifacts/windows-installer/*/installer-release.json
-            ${{ env.SRC_DIR }}/artifacts/windows-installer/*/SHA256SUMS.txt
+            ${{ env.SRC_DIR }}/artifacts/windows-installer/**/*-Setup-*.exe
+            ${{ env.SRC_DIR }}/artifacts/windows-installer/**/installer-release.json
+            ${{ env.SRC_DIR }}/artifacts/windows-installer/**/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 14
 
@@ -217,6 +216,5 @@ jobs:
             ${{ env.SRC_DIR }}/src/Zs.DwfNativeMarkup.Desktop/src-tauri/target/release/bundle/deb/*.deb
             ${{ env.SRC_DIR }}/src/Zs.DwfNativeMarkup.Desktop/src-tauri/target/release/bundle/rpm/*.rpm
             ${{ env.SRC_DIR }}/src/Zs.DwfNativeMarkup.Desktop/src-tauri/target/release/bundle/tar/*.tar.gz
-            ${{ env.SRC_DIR }}/src/Zs.DwfNativeMarkup.Desktop/src-tauri/target/release/bundle/nsis/*-setup.exe
-            ${{ env.SRC_DIR }}/artifacts/windows-installer/*/ZsDwfReader-Setup-*.exe
+            ${{ env.SRC_DIR }}/artifacts/windows-installer/**/*-Setup-*.exe
           fail_on_unmatched_files: false
