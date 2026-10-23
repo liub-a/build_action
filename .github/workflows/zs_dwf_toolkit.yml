@@ -151,22 +151,29 @@ jobs:
           # 先分清「进程根本起不来」还是「只在读真实 DWF 时崩」。
           echo "--- 无参"; "$W" > out.txt 2>&1; echo "  rc=$?"; head -4 out.txt
           echo "--- 不存在的文件"; "$W" info tests/data/nope.dwf > out.txt 2>&1; echo "  rc=$?"; head -4 out.txt
+          # 最关键的一条：不带调试器直接跑，看真实退出码。之前 0xC0000409 是冒烟测试用
+          # 仓库里已提交的旧 DLL 跑出来的，这个新编出来的 DLL 未必同样崩法。
+          echo "--- 直接跑真实 DWF（无调试器）"
+          "$W" info tests/data/blocks_and_tables.dwf > direct.txt 2>&1; echo "  rc=$?"; head -20 direct.txt
 
           CDB="/c/Program Files (x86)/Windows Kits/10/Debuggers/x64/cdb.exe"
           # 带上 PDB，栈帧才是真实函数名；否则 cdb 只能猜最近的导出符号（上一次就是这样）。
-          find build -maxdepth 4 -name '*.pdb' -exec cp -n {} native-prebuilt/win-x64/ \; 2>/dev/null
+          echo "--- 找 PDB"
+          ls -d build/*/ 2>/dev/null
+          find . -name '*.pdb' -not -path './third_party/*' 2>/dev/null | head -20
+          find . -name '*.pdb' -not -path './third_party/*' -exec cp -n {} native-prebuilt/win-x64/ \; 2>/dev/null
           ls -la native-prebuilt/win-x64/*.pdb 2>/dev/null
           echo "--- cdb: $(ls -l "$CDB" 2>/dev/null | tail -1)"
           for sample in tests/data/blocks_and_tables.dwf tests/data/IRD-Addition.dwf; do
             log="cdb-$(basename "$sample").log"
             echo "=== cdb info $sample ==="
-            # 停在第一次机会异常（访问违例 + C++ EH）：先看异常记录，再看栈。
-            "$CDB" -y native-prebuilt/win-x64 -G -o -c 'sxe av; sxe 0xe06d7363; g; .exr -1; kb; q' "$W" info "$sample" > "$log" 2>&1
+            # 停在第一次机会异常：先看异常记录和寄存器，再看带符号的栈和出错指令。
+            "$CDB" -y native-prebuilt/win-x64 -G -o -c 'sxe av; sxe 0xe06d7363; g; .exr -1; r; kb; u @rip-24 L12; q' "$W" info "$sample" > "$log" 2>&1
             echo "--- 进度标记（走到哪一步）"
-            grep -a '\[info\]' "$log" | head -12
+            grep -a '\[info\]' "$log" | head -20
             grep -aE 'first chance|ExceptionAddress|ExceptionCode|NumberParameters|Parameter\[|未处理|Unhandled|Attempt to' "$log" | head -12
             echo "--- 栈"
-            tail -40 "$log" | sed 's/^/    /'
+            tail -50 "$log" | sed 's/^/    /'
           done
           true
 
