@@ -153,13 +153,18 @@ jobs:
           echo "--- 不存在的文件"; "$W" info tests/data/nope.dwf > out.txt 2>&1; echo "  rc=$?"; head -4 out.txt
 
           CDB="/c/Program Files (x86)/Windows Kits/10/Debuggers/x64/cdb.exe"
+          # 带上 PDB，栈帧才是真实函数名；否则 cdb 只能猜最近的导出符号（上一次就是这样）。
+          find build -maxdepth 4 -name '*.pdb' -exec cp -n {} native-prebuilt/win-x64/ \; 2>/dev/null
+          ls -la native-prebuilt/win-x64/*.pdb 2>/dev/null
           echo "--- cdb: $(ls -l "$CDB" 2>/dev/null | tail -1)"
           for sample in tests/data/blocks_and_tables.dwf tests/data/IRD-Addition.dwf; do
             log="cdb-$(basename "$sample").log"
             echo "=== cdb info $sample ==="
             # 停在第一次机会异常（访问违例 + C++ EH）：先看异常记录，再看栈。
-            "$CDB" -G -o -c 'sxe av; sxe 0xe06d7363; g; .exr -1; kb; q' "$W" info "$sample" > "$log" 2>&1
-            grep -aE 'first chance|ExceptionAddress|ExceptionCode|NumberParameters|Parameter\[|未处理|Unhandled' "$log" | head -12
+            "$CDB" -y native-prebuilt/win-x64 -G -o -c 'sxe av; sxe 0xe06d7363; g; .exr -1; kb; q' "$W" info "$sample" > "$log" 2>&1
+            echo "--- 进度标记（走到哪一步）"
+            grep -a '\[info\]' "$log" | head -12
+            grep -aE 'first chance|ExceptionAddress|ExceptionCode|NumberParameters|Parameter\[|未处理|Unhandled|Attempt to' "$log" | head -12
             echo "--- 栈"
             tail -40 "$log" | sed 's/^/    /'
           done
