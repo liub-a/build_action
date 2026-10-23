@@ -136,6 +136,23 @@ jobs:
           ./scripts/setup-oda-dwftoolkit.sh
           bash scripts/build-native-release.sh
 
+      # 临时诊断（定位 Windows 上打开真实 DWF 崩溃，exit 0xC0000409）：
+      # 用刚构建出来的 worker 直接 info 两个公开样本。dwfcore 的诊断补丁会把失控的
+      # DWFString 长度字段和调用者地址打到 stderr。worker 会崩，所以非零不算失败，
+      # 但两个样本都要跑到、日志要完整。定位完成后改成断言 rc=0。
+      - name: Diagnose DWF open crash (windows)
+        if: steps.flag.outputs.run == 'true' && matrix.label == 'win'
+        working-directory: ${{ env.SRC_DIR }}
+        shell: bash
+        run: |
+          set +e
+          for sample in tests/data/blocks_and_tables.dwf tests/data/IRD-Addition.dwf; do
+            echo "=== info $sample ==="
+            ./native-prebuilt/win-x64/zs_dwf_worker.exe info "$sample" 2>&1 | head -40
+            echo "rc=${PIPESTATUS[0]}"
+          done
+          true
+
       # artifact 名就是 RID：package job 直接下载到 native-prebuilt/ 下按名字落位。
       - name: Upload native artifacts
         if: steps.flag.outputs.run == 'true'
