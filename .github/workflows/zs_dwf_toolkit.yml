@@ -132,6 +132,9 @@ jobs:
         env:
           ZS_RID: win-x64
           ZS_JOBS: 2
+          # 诊断期生成 PDB，cdb 才能把栈帧解析成真实函数名（Release 默认不产生 PDB）。
+          CXXFLAGS: /Zi
+          LDFLAGS: /DEBUG
         run: |
           ./scripts/setup-oda-dwftoolkit.sh
           bash scripts/build-native-release.sh
