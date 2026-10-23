@@ -146,10 +146,22 @@ jobs:
         shell: bash
         run: |
           set +e
+          W=./native-prebuilt/win-x64/zs_dwf_worker.exe
+          echo "--- 产物"; ls -la native-prebuilt/win-x64
+          # 先分清「进程根本起不来」还是「只在读真实 DWF 时崩」。
+          echo "--- 无参"; "$W" > out.txt 2>&1; echo "  rc=$?"; head -4 out.txt
+          echo "--- 不存在的文件"; "$W" info tests/data/nope.dwf > out.txt 2>&1; echo "  rc=$?"; head -4 out.txt
+
+          CDB="/c/Program Files (x86)/Windows Kits/10/Debuggers/x64/cdb.exe"
+          echo "--- cdb: $(ls -l "$CDB" 2>/dev/null | tail -1)"
           for sample in tests/data/blocks_and_tables.dwf tests/data/IRD-Addition.dwf; do
-            echo "=== info $sample ==="
-            ./native-prebuilt/win-x64/zs_dwf_worker.exe info "$sample" 2>&1 | head -40
-            echo "rc=${PIPESTATUS[0]}"
+            log="cdb-$(basename "$sample").log"
+            echo "=== cdb info $sample ==="
+            # 停在第一次机会异常（访问违例 + C++ EH）：先看异常记录，再看栈。
+            "$CDB" -G -o -c 'sxe av; sxe 0xe06d7363; g; .exr -1; kb; q' "$W" info "$sample" > "$log" 2>&1
+            grep -aE 'first chance|ExceptionAddress|ExceptionCode|NumberParameters|Parameter\[|未处理|Unhandled' "$log" | head -12
+            echo "--- 栈"
+            tail -40 "$log" | sed 's/^/    /'
           done
           true
 
