@@ -85,11 +85,34 @@ jobs:
   # --with-dwf 的 c-shared 产物是真正出货的形态（LIB 静态链进 libzs.so），
   # 这条平台相关逻辑（--exclude-libs,ALL + version script）此前只在 darwin 验证过。
   # 脚本自带四项硬验收：动态导出面与 PDF-only 基线逐行一致、无 zs_dwf_*/zs_w2d_*
-  # 动态导出、zs_dwf_get_info_json 以局部符号存在、不 strip。job 再补 rpath 与
-  # DT_NEEDED 检查；不上传任何产物。
+  # 动态导出、zs_dwf_get_info_json 以局部符号存在、不 strip。job 再补 rpath、
+  # DT_NEEDED、运行时冒烟与拒绝分支断言；不上传任何产物。
+  #
+  # 矩阵：amd64 用 ubuntu-latest、arm64 用 ubuntu-24.04-arm（原生 arm runner，
+  # 容器走 --platform linux/arm64，避免在 amd64 上跑 qemu 交叉构建）。
   dwf-cshared:
-    name: dwf-cshared (linux-amd64)
-    runs-on: ubuntu-latest
+    name: dwf-cshared (${{ matrix.rid }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: linux-amd64
+            os: ubuntu-latest
+            platform: linux/amd64
+            goarch: amd64
+            pdfium: linux-x64
+            arch: x64
+            lib: dist/libzs-linux-x64.so
+            hdr: dist/libzs-linux-x64.h
+          - rid: linux-arm64
+            os: ubuntu-24.04-arm
+            platform: linux/arm64
+            goarch: arm64
+            pdfium: linux-arm64
+            arch: arm64
+            lib: dist/libzs-linux-arm64.so
+            hdr: dist/libzs-linux-arm64.h
     steps:
       - name: Checkout product source
         shell: bash
@@ -110,10 +133,16 @@ jobs:
         shell: bash
         env:
           GO_VERSION: ${{ env.GO_VERSION }}
+          GOARCH: ${{ matrix.goarch }}
+          PLATFORM: ${{ matrix.platform }}
+          PDFIUM: ${{ matrix.pdfium }}
+          ARCH: ${{ matrix.arch }}
+          LIB: ${{ matrix.lib }}
+          HDR: ${{ matrix.hdr }}
         run: |
           set -euo pipefail
-          docker run --rm --platform linux/amd64 \
-            -e GO_VERSION \
+          docker run --rm --platform "$PLATFORM" \
+            -e GO_VERSION -e GOARCH -e PDFIUM -e ARCH -e LIB -e HDR \
             -v "$PWD/${SRC_DIR}:/src" -w /src \
             debian:bullseye bash -c '
           set -euo pipefail
@@ -128,17 +157,18 @@ jobs:
           rm -rf /var/lib/apt/lists/*
           python3 -m pip install --no-cache-dir cmake
           export PATH="/usr/local/bin:${PATH}"
-          curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" | tar -xz -C /usr/local
+          curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${GOARCH}.tar.gz" | tar -xz -C /usr/local
           export PATH="/usr/local/go/bin:${PATH}"
           export GOCACHE=/tmp/gocache GOPATH=/tmp/gopath
+          echo "=== ${GOARCH} / ${PDFIUM} / ${ARCH} ==="
+          uname -m
           # PDF-only 基线构建需要 pdfium 的 .pc 与 libpdfium.so。
-          PDFIUM_TARGET=linux-x64 bash scripts/fetch-pdfium.sh
+          PDFIUM_TARGET="${PDFIUM}" bash scripts/fetch-pdfium.sh
           # 脚本内部完成：DWF native 静态构建 → PDF-only 基线 → --with-dwf 链接 →
           # 四项符号硬验收（导出面逐行一致 / 无 DWF 动态导出 / 局部符号 / 不 strip）。
-          bash scripts/build-c-shared.sh --with-dwf --arch x64
-          LIB=dist/libzs-linux-x64.so
+          bash scripts/build-c-shared.sh --with-dwf --arch "${ARCH}"
           test -f "$LIB"
-          ls -l "$LIB" dist/libzs-linux-x64.h
+          ls -l "$LIB" "$HDR"
           # 相对 rpath：宿主把 libpdfium 放在同一目录即可加载。
           readelf -d "$LIB" > /tmp/dyn.txt
           grep -q "ORIGIN" /tmp/dyn.txt || { echo "FAIL: 缺少 \$ORIGIN rpath"; exit 1; }
@@ -156,7 +186,7 @@ jobs:
           # 运行时冒烟：只验「能 dlopen + 能调用免授权 ABI」，不打开任何文档。
           # sdk_release 产物打开文档需要授权文件，容器里没有；这里能证明的是加载期
           # 全部符号可解析（ctypes 的 dlopen 带 RTLD_NOW）、Go 运行时正常初始化。
-          python3 -c "import ctypes, sys; lib = ctypes.CDLL(sys.argv[1], mode=ctypes.RTLD_GLOBAL); lib.zs_version.restype = ctypes.c_char_p; v = lib.zs_version(); print(v); assert v; lib.zs_machine_id.restype = ctypes.c_char_p; print(lib.zs_machine_id()); print(lib.zs_license_installed())" /src/dist/libzs-linux-x64.so
+          python3 -c "import ctypes, sys; lib = ctypes.CDLL(sys.argv[1], mode=ctypes.RTLD_GLOBAL); lib.zs_version.restype = ctypes.c_char_p; v = lib.zs_version(); print(v); assert v; lib.zs_machine_id.restype = ctypes.c_char_p; print(lib.zs_machine_id()); print(lib.zs_license_installed())" "$PWD/$LIB"
           # 拒绝分支：--with-dwf 只支持 amd64/arm64，386 与 mips64le 必须快速失败。
           for a in 386 mips64le; do
             if bash scripts/build-c-shared.sh --with-dwf --arch "$a" >/tmp/neg.log 2>&1; then
