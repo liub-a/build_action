@@ -80,6 +80,21 @@ jobs:
           bash scripts/build-dwf-native.sh --rid linux-amd64 --tests
           source build/dwf/linux-amd64/env.sh
           go test -tags dwf ./dwf/...
+          # 真实样本运行时冒烟：DWF 的运行时入口在 Go 侧（zs-dwf CLI），不是 csdk
+          # 的 C ABI——csdk/dwf_link.go 只把静态库拉进链接图，不导出 DWF 入口，
+          # 所以 zs_open 对 DWF 返回 incorrect format 是设计如此。这里跑仓库里的
+          # 真实样本，验证 native 渲染器在 Linux 上真的能解析并出图。
+          go build -tags dwf -o /tmp/zs-dwf ./dwf/cmd/zs-dwf
+          /tmp/zs-dwf info dwf/testdata/IRD-Addition.dwf > /tmp/info.json
+          grep -q "\"success\": true" /tmp/info.json
+          echo "info ok: $(wc -c < /tmp/info.json) bytes"
+          rm -rf /tmp/dwfout && mkdir -p /tmp/dwfout
+          /tmp/zs-dwf render dwf/testdata/IRD-Addition.dwf /tmp/dwfout -page 0 -width 800
+          ls -l /tmp/dwfout
+          test -s /tmp/dwfout/page-000.png
+          od -An -tx1 -N8 /tmp/dwfout/page-000.png | tr -d " \n" | grep -q 89504e470d0a1a0a ||
+            { echo "FAIL: 输出不是 PNG"; exit 1; }
+          echo "render ok: $(wc -c < /tmp/dwfout/page-000.png) bytes"
           '
 
   # --with-dwf 的 c-shared 产物是真正出货的形态（LIB 静态链进 libzs.so），
