@@ -84,7 +84,9 @@ jobs:
           # 的 C ABI——csdk/dwf_link.go 只把静态库拉进链接图，不导出 DWF 入口，
           # 所以 zs_open 对 DWF 返回 incorrect format 是设计如此。这里跑仓库里的
           # 真实样本，验证 native 渲染器在 Linux 上真的能解析并出图。
-          go build -tags dwf -o /tmp/zs-dwf ./dwf/cmd/zs-dwf
+          # -buildvcs=false：容器内 /src 属主与 root 不同，git 会因 dubious ownership
+          # 拒绝读取仓库信息，VCS stamping 直接失败。
+          go build -tags dwf -buildvcs=false -o /tmp/zs-dwf ./dwf/cmd/zs-dwf
           /tmp/zs-dwf info dwf/testdata/IRD-Addition.dwf > /tmp/info.json
           grep -q "\"success\": true" /tmp/info.json
           echo "info ok: $(wc -c < /tmp/info.json) bytes"
