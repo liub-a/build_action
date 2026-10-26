@@ -59,11 +59,10 @@ jobs:
           export DEBIAN_FRONTEND=noninteractive
           # bullseye 已进入 archive.debian.org，官方镜像的 security 池会 404，
           # 因此先把源指到 archive 并关掉 Valid-Until 检查（EOL 发行版必需）。
-          sed -i -e 's|http://deb.debian.org/debian-security|http://archive.debian.org/debian-security|' \
-                 -e 's|http://deb.debian.org/debian|http://archive.debian.org/debian|' \
-                 /etc/apt/sources.list
-          sed -i '/bullseye-updates/d' /etc/apt/sources.list
-          echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99archive
+          sed -i "s|http://deb.debian.org/debian-security|http://archive.debian.org/debian-security|" /etc/apt/sources.list
+          sed -i "s|http://deb.debian.org/debian|http://archive.debian.org/debian|" /etc/apt/sources.list
+          sed -i "/bullseye-updates/d" /etc/apt/sources.list
+          echo "Acquire::Check-Valid-Until \"false\";" > /etc/apt/apt.conf.d/99archive
           apt-get update
           # debian:bullseye 自带 cmake 3.18，而 dwf/native/CMakeLists.txt 要求 3.20+，
           # 所以用 pip 装一个较新的 cmake（wheel 自带二进制，不动 glibc 基线）。
