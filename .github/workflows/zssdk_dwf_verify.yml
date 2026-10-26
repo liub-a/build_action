@@ -1,0 +1,75 @@
+name: build-zssdk-dwf-verify
+
+# DWF 验证 workflow：只验 DWF native 构建与 Go 绑定，不产出、不上传任何产物。
+#
+# 源码在私有仓库 (https://code.zsrhkj.com/zsrhkj/zssdk.git)，CI 内用 token clone。
+#
+# 约束（产品仓库 docs/dwf/CI.md 同步记录）：
+#   - DWF 不对外共享，本 workflow 不公开上传产物；因此没有任何 upload-artifact 步骤。
+#   - 与 build-zssdk 无依赖关系，失败不阻塞 PDF release；只在本仓库手动 dispatch
+#     的 Actions 运行页可见（产品仓库 PR 不会触发）。
+#   - Linux 基线沿用 debian:bullseye（glibc 2.31），与 build-c-shared.sh 一致。
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "产品仓库分支/标签 (默认 main)"
+        required: false
+        default: main
+
+env:
+  REPO_PATH: code.zsrhkj.com/zsrhkj/zssdk.git
+  SRC_DIR: src
+  # 与 go.mod 的 go 指令一致
+  GO_VERSION: 1.26.0
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  dwf-verify:
+    name: dwf-verify (linux-amd64)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout product source
+        shell: bash
+        env:
+          REPO_USER: ${{ secrets.REPO_USER }}
+          REPO_TOKEN: ${{ secrets.REPO_TOKEN }}
+          REF: ${{ github.event.inputs.ref }}
+        run: |
+          set -euo pipefail
+          ref="${REF:-main}"
+          git -c credential.helper= \
+              -c credential.helper='!f() { echo "username=$REPO_USER"; echo "password=$REPO_TOKEN"; }; f' \
+              clone --depth 1 -b "$ref" \
+              "https://${REPO_PATH}" "$SRC_DIR"
+          echo "cloned ref=$ref"
+
+      - name: Build DWF native + run tests (Linux container)
+        shell: bash
+        env:
+          GO_VERSION: ${{ env.GO_VERSION }}
+        run: |
+          set -euo pipefail
+          docker run --rm --platform linux/amd64 \
+            -e GO_VERSION \
+            -v "$PWD/${SRC_DIR}:/src" -w /src \
+            debian:bullseye bash -c '
+          set -euo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          # debian:bullseye 自带 cmake 3.18，而 dwf/native/CMakeLists.txt 要求 3.20+，
+          # 所以用 pip 装一个较新的 cmake（wheel 自带二进制，不动 glibc 基线）。
+          apt-get install -y --no-install-recommends \
+            build-essential perl git ca-certificates curl python3-pip
+          rm -rf /var/lib/apt/lists/*
+          python3 -m pip install --no-cache-dir cmake
+          export PATH="/usr/local/bin:${PATH}"
+          curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" | tar -xz -C /usr/local
+          export PATH="/usr/local/go/bin:${PATH}"
+          export GOCACHE=/tmp/gocache GOPATH=/tmp/gopath
+          cmake --version | head -1
+          bash scripts/build-dwf-native.sh --rid linux-amd64 --tests
+          source build/dwf/linux-amd64/env.sh
+          go test -tags dwf ./dwf/...
+          '
