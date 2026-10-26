@@ -81,3 +81,76 @@ jobs:
           source build/dwf/linux-amd64/env.sh
           go test -tags dwf ./dwf/...
           '
+
+  # --with-dwf 的 c-shared 产物是真正出货的形态（LIB 静态链进 libzs.so），
+  # 这条平台相关逻辑（--exclude-libs,ALL + version script）此前只在 darwin 验证过。
+  # 脚本自带四项硬验收：动态导出面与 PDF-only 基线逐行一致、无 zs_dwf_*/zs_w2d_*
+  # 动态导出、zs_dwf_get_info_json 以局部符号存在、不 strip。job 再补 rpath 与
+  # DT_NEEDED 检查；不上传任何产物。
+  dwf-cshared:
+    name: dwf-cshared (linux-amd64)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout product source
+        shell: bash
+        env:
+          REPO_USER: ${{ secrets.REPO_USER }}
+          REPO_TOKEN: ${{ secrets.REPO_TOKEN }}
+          REF: ${{ github.event.inputs.ref }}
+        run: |
+          set -euo pipefail
+          ref="${REF:-main}"
+          git -c credential.helper= \
+              -c credential.helper='!f() { echo "username=$REPO_USER"; echo "password=$REPO_TOKEN"; }; f' \
+              clone --depth 1 -b "$ref" \
+              "https://${REPO_PATH}" "$SRC_DIR"
+          echo "cloned ref=$ref"
+
+      - name: Build c-shared with DWF + verify exports (Linux container)
+        shell: bash
+        env:
+          GO_VERSION: ${{ env.GO_VERSION }}
+        run: |
+          set -euo pipefail
+          docker run --rm --platform linux/amd64 \
+            -e GO_VERSION \
+            -v "$PWD/${SRC_DIR}:/src" -w /src \
+            debian:bullseye bash -c '
+          set -euo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+          sed -i "s|http://deb.debian.org/debian-security|http://archive.debian.org/debian-security|" /etc/apt/sources.list
+          sed -i "s|http://deb.debian.org/debian|http://archive.debian.org/debian|" /etc/apt/sources.list
+          sed -i "/bullseye-updates/d" /etc/apt/sources.list
+          echo "Acquire::Check-Valid-Until \"false\";" > /etc/apt/apt.conf.d/99archive
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential perl git ca-certificates curl python3-pip pkg-config
+          rm -rf /var/lib/apt/lists/*
+          python3 -m pip install --no-cache-dir cmake
+          export PATH="/usr/local/bin:${PATH}"
+          curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" | tar -xz -C /usr/local
+          export PATH="/usr/local/go/bin:${PATH}"
+          export GOCACHE=/tmp/gocache GOPATH=/tmp/gopath
+          # PDF-only 基线构建需要 pdfium 的 .pc 与 libpdfium.so。
+          PDFIUM_TARGET=linux-x64 bash scripts/fetch-pdfium.sh
+          # 脚本内部完成：DWF native 静态构建 → PDF-only 基线 → --with-dwf 链接 →
+          # 四项符号硬验收（导出面逐行一致 / 无 DWF 动态导出 / 局部符号 / 不 strip）。
+          bash scripts/build-c-shared.sh --with-dwf --arch x64
+          LIB=dist/libzs-linux-x64.so
+          test -f "$LIB"
+          ls -l "$LIB" dist/libzs-linux-x64.h
+          # 相对 rpath：宿主把 libpdfium 放在同一目录即可加载。
+          readelf -d "$LIB" > /tmp/dyn.txt
+          grep -q "ORIGIN" /tmp/dyn.txt || { echo "FAIL: 缺少 \$ORIGIN rpath"; exit 1; }
+          echo "=== DT_NEEDED ==="
+          grep NEEDED /tmp/dyn.txt
+          # 不得动态依赖任何 DWF 共享库（DWF 是静态链进去的）。
+          if grep NEEDED /tmp/dyn.txt | grep -qi "dwf"; then
+            echo "FAIL: DT_NEEDED 出现 DWF 共享库"; exit 1
+          fi
+          # 动态导出面计数，作为日志留证（与 PDF-only 基线的一致性由脚本断言）。
+          nm -D --defined-only "$LIB" > /tmp/dynsym.txt
+          echo "dynamic defined symbols: $(wc -l < /tmp/dynsym.txt)"
+          echo "zs_* exports: $(grep -c " zs_" /tmp/dynsym.txt || true)"
+          echo "zs_dwf_* / zs_w2d_* exports: $(grep -c "zs_dwf_\|zs_w2d_" /tmp/dynsym.txt || true)"
+          '
