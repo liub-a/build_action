@@ -153,4 +153,17 @@ jobs:
           echo "dynamic defined symbols: $(wc -l < /tmp/dynsym.txt)"
           echo "zs_* exports: $(grep -c " zs_" /tmp/dynsym.txt || true)"
           echo "zs_dwf_* / zs_w2d_* exports: $(grep -c "zs_dwf_\|zs_w2d_" /tmp/dynsym.txt || true)"
+          # 运行时冒烟：只验「能 dlopen + 能调用免授权 ABI」，不打开任何文档。
+          # sdk_release 产物打开文档需要授权文件，容器里没有；这里能证明的是加载期
+          # 全部符号可解析（ctypes 的 dlopen 带 RTLD_NOW）、Go 运行时正常初始化。
+          python3 -c "import ctypes, sys; lib = ctypes.CDLL(sys.argv[1], mode=ctypes.RTLD_GLOBAL); lib.zs_version.restype = ctypes.c_char_p; v = lib.zs_version(); print(v); assert v; lib.zs_machine_id.restype = ctypes.c_char_p; print(lib.zs_machine_id()); print(lib.zs_license_installed())" /src/dist/libzs-linux-x64.so
+          # 拒绝分支：--with-dwf 只支持 amd64/arm64，386 与 mips64le 必须快速失败。
+          for a in 386 mips64le; do
+            if bash scripts/build-c-shared.sh --with-dwf --arch "$a" >/tmp/neg.log 2>&1; then
+              echo "FAIL: --with-dwf --arch $a 应被拒绝"; exit 1
+            fi
+            grep -q "不支持 linux/$a" /tmp/neg.log ||
+              { echo "FAIL: linux/$a 的错误信息不符"; cat /tmp/neg.log; exit 1; }
+            echo "reject ok: linux/$a"
+          done
           '
