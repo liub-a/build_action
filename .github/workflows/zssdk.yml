@@ -1,0 +1,262 @@
+name: build-zssdk
+
+# 聚合构建仓库的 Go SDK workflow。
+# 源码在私有仓库 (https://code.zsrhkj.com/zsrhkj/zssdk.git)，CI 内用 token clone，
+# 然后跑产品自带的 scripts/build-c-shared.sh，产出 C ABI 共享库并打包。
+#
+# 产物只发二进制：libzs 用 `sdk_release` tag 编译，未装入离线授权时拒绝打开文档
+# （zs_license_install → zs_open / zs_render_png）。
+#
+# 平台：
+#   macOS  —— macos-latest 原生编译（架构按 runner 实测，不写死）。
+#   Linux  x64 / arm64 —— 在 debian:bullseye 容器里编译，把 glibc 基线钉在 2.31，
+#                          并用产品自带的 check-glibc.sh 断言，避免老发行版报
+#                          "GLIBC_2.xx not found"。
+#
+# 每个平台包内含：lib/（libzs + libpdfium）、include/ 头文件、LICENSE、SHA256SUMS。
+# 宿主把 libpdfium 与 libzs 放在同一目录即可加载（库内已带 @loader_path / $ORIGIN）。
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "产品仓库分支/标签 (默认 main)"
+        required: false
+        default: main
+      platforms:
+        description: "构建平台 (all / mac / linux)"
+        required: false
+        default: all
+        type: choice
+        options: [all, mac, linux]
+      release:
+        description: "是否附到 GitHub Release"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+env:
+  REPO_PATH: code.zsrhkj.com/zsrhkj/zssdk.git
+  SRC_DIR: src
+  # 与 go.mod 的 go 指令一致
+  GO_VERSION: 1.26.0
+  GLIBC_MAX: "2.31"
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  build:
+    name: build (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: mac
+            os: macos-latest
+            ext: dylib
+          - label: linux
+            os: ubuntu-latest
+            goarch: amd64
+            # build-c-shared.sh 用 --arch 的原样拼产物名，amd64 会得到
+            # libzs-linux-amd64.so；统一用 x64，产物名与 RID 对齐。
+            arch: x64
+            pdfium: linux-x64
+            ext: so
+            docker_platform: linux/amd64
+          - label: linux
+            os: ubuntu-24.04-arm
+            goarch: arm64
+            arch: arm64
+            pdfium: linux-arm64
+            ext: so
+            docker_platform: linux/arm64
+
+    steps:
+      - name: Resolve run flag
+        id: flag
+        shell: bash
+        run: |
+          want='${{ github.event.inputs.platforms }}'
+          [ -z "$want" ] && want=all
+          if [ "$want" = "all" ] || [ "$want" = "${{ matrix.label }}" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "skip ${{ matrix.label }} (selected: $want)"
+          fi
+
+      # Checkout 私有产品源码（token 走 credential helper，不内嵌进 remote URL）。
+      - name: Checkout product source
+        if: steps.flag.outputs.run == 'true'
+        shell: bash
+        env:
+          REPO_USER: ${{ secrets.REPO_USER }}
+          REPO_TOKEN: ${{ secrets.REPO_TOKEN }}
+          REF: ${{ github.event.inputs.ref }}
+        run: |
+          set -euo pipefail
+          ref="${REF:-main}"
+          git -c credential.helper= \
+              -c credential.helper='!f() { echo "username=$REPO_USER"; echo "password=$REPO_TOKEN"; }; f' \
+              clone --depth 1 -b "$ref" \
+              "https://${REPO_PATH}" "$SRC_DIR"
+          echo "cloned ref=$ref"
+
+      - name: Setup Go (macOS)
+        if: steps.flag.outputs.run == 'true' && matrix.label == 'mac'
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: ${{ env.SRC_DIR }}/go.sum
+
+      # macOS：架构按 runner 实测决定，PDFium 与 libzs 必须同架构
+      # （cgo 在 darwin 上不能跨架构编，写死 arm64 会在 x64 runner 上直接失败）。
+      - name: Build c-shared (macOS)
+        if: steps.flag.outputs.run == 'true' && matrix.label == 'mac'
+        working-directory: ${{ env.SRC_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # 架构名与 pdfium 目录名对齐（darwin-x64 / darwin-arm64），
+          # cgo 在 darwin 上不能跨架构编，所以按 runner 实测取，不写死。
+          case "$(uname -m)" in
+            arm64) ARCH=arm64 ;;
+            x86_64) ARCH=x64 ;;
+            *) echo "FAIL: macOS runner 架构不支持: $(uname -m)" >&2; exit 1 ;;
+          esac
+          echo "runner arch: ${ARCH}"
+          # go-pdfium 用 `#cgo pkg-config: pdfium`，没有 pkg-config 就编不出来。
+          command -v pkg-config >/dev/null 2>&1 || brew install pkg-config
+          PDFIUM_TARGET="darwin-${ARCH}" bash scripts/fetch-pdfium.sh
+          bash scripts/build-c-shared.sh --arch "${ARCH}"
+
+      # Linux 在固定 glibc 基线的容器里编译；容器内自行下载 Go 与 PDFium。
+      - name: Build c-shared (Linux container)
+        if: steps.flag.outputs.run == 'true' && matrix.label == 'linux'
+        working-directory: ${{ env.SRC_DIR }}
+        shell: bash
+        env:
+          GOARCH: ${{ matrix.goarch }}
+          ARCH: ${{ matrix.arch }}
+          PDFIUM_TARGET: ${{ matrix.pdfium }}
+        run: |
+          set -euo pipefail
+          docker run --rm --platform "${{ matrix.docker_platform }}" \
+            -e GO_VERSION -e GOARCH -e ARCH -e PDFIUM_TARGET \
+            -v "$PWD:/src" -w /src \
+            debian:bullseye bash -c '
+          set -euo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+          # bullseye 已从 deb.debian.org 归档，只剩 archive.debian.org。
+          sed -i "s|http://deb.debian.org/debian-security|http://archive.debian.org/debian-security|" /etc/apt/sources.list
+          sed -i "s|http://deb.debian.org/debian|http://archive.debian.org/debian|" /etc/apt/sources.list
+          sed -i "/bullseye-updates/d" /etc/apt/sources.list
+          echo "Acquire::Check-Valid-Until \"false\";" > /etc/apt/apt.conf.d/99archive
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential binutils pkg-config curl ca-certificates git
+          rm -rf /var/lib/apt/lists/*
+          curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${GOARCH}.tar.gz" | tar -xz -C /usr/local
+          export PATH="/usr/local/go/bin:${PATH}"
+          export GOCACHE=/tmp/gocache GOPATH=/tmp/gopath
+          PDFIUM_TARGET="${PDFIUM_TARGET}" bash scripts/fetch-pdfium.sh
+          bash scripts/build-c-shared.sh --arch "${ARCH}"
+          '
+
+      # 产物名按实际构建结果推导，不写死：build-c-shared.sh 用 --arch 原样拼名，
+      # 这里必须认准唯一的 libzs-*.
+      - name: Verify and package
+        id: pack
+        if: steps.flag.outputs.run == 'true'
+        working-directory: ${{ env.SRC_DIR }}
+        shell: bash
+        env:
+          EXT: ${{ matrix.ext }}
+        run: |
+          set -euo pipefail
+          # macOS runner 的 /bin/bash 是 3.2：空数组在 set -u 下展开会报 unbound
+          # variable，所以用 find 数文件，不用数组。
+          count=$(find dist -maxdepth 1 -type f -name "libzs-*.${EXT}" | wc -l | tr -d ' ')
+          [ "$count" = "1" ] || { echo "FAIL: 期望恰好 1 个 libzs-*.${EXT}，实际 ${count} 个" >&2; exit 1; }
+          LIB=$(find dist -maxdepth 1 -type f -name "libzs-*.${EXT}" | head -1)
+          HDR="${LIB%.${EXT}}.h"
+          [ -f "$HDR" ] || { echo "FAIL: 缺头文件 ${HDR}" >&2; exit 1; }
+          RID="$(basename "${LIB}" | sed -E "s/^libzs-//; s/\.${EXT}$//")"
+          NAME="zssdk-${RID}"
+          echo "rid=${RID}" >> "$GITHUB_OUTPUT"
+          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
+
+          # 相对 rpath + glibc 基线断言，缺一个都不要发出去。
+          # 输出先落文件再 grep：grep -q 命中即退出，会给上游发 SIGPIPE，
+          # 在 set -o pipefail 下反而把整条管道判成失败。
+          if [ "${EXT}" = dylib ]; then
+            otool -l "$LIB" > /tmp/dyn.txt
+            grep -q '@loader_path' /tmp/dyn.txt || { echo "FAIL: 缺少 @loader_path rpath"; exit 1; }
+          else
+            readelf -d "$LIB" > /tmp/dyn.txt
+            grep -q 'ORIGIN' /tmp/dyn.txt || { echo "FAIL: 缺少 \$ORIGIN rpath"; exit 1; }
+            bash scripts/check-glibc.sh --max "${GLIBC_MAX}" "$LIB"
+          fi
+
+          # PDFium 原生库：与 libzs 同架构，必须同目录。
+          # 目录名与 RID 同名（darwin-arm64 / linux-x64 / …），由构建脚本的
+          # OS/ARCH → target 映射决定，两者必须一致。
+          PDFIUM_DIR="third_party/pdfium/${RID}"
+          [ -f "${PDFIUM_DIR}/lib/libpdfium.${EXT}" ] || { echo "FAIL: 找不到 ${PDFIUM_DIR}/lib/libpdfium.${EXT}" >&2; exit 1; }
+          [ -f "${PDFIUM_DIR}/LICENSE" ] || { echo "FAIL: 找不到 ${PDFIUM_DIR}/LICENSE" >&2; exit 1; }
+
+          rm -rf pkg out
+          mkdir -p "pkg/${NAME}/lib" "pkg/${NAME}/include" out
+          cp "$LIB" "pkg/${NAME}/lib/"
+          cp "${PDFIUM_DIR}/lib/libpdfium.${EXT}" "pkg/${NAME}/lib/"
+          cp "$HDR" "pkg/${NAME}/include/"
+          cp "${PDFIUM_DIR}/LICENSE" "pkg/${NAME}/LICENSE"
+
+          cd "pkg/${NAME}"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum lib/* include/* LICENSE > SHA256SUMS
+          else
+            shasum -a 256 lib/* include/* LICENSE > SHA256SUMS
+          fi
+          cd ../..
+          tar -czf "out/${NAME}.tar.gz" -C pkg "${NAME}"
+          echo "打包完成：${NAME}.tar.gz"
+          cat "pkg/${NAME}/SHA256SUMS"
+
+      - name: Upload build artifacts
+        if: steps.flag.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: zssdk-${{ steps.pack.outputs.rid }}
+          path: ${{ env.SRC_DIR }}/out/*.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
+      # 版本取 csdk/main.go 的 const version。
+      - name: Resolve version
+        id: ver
+        if: >
+          steps.flag.outputs.run == 'true' &&
+          (startsWith(github.ref, 'refs/tags/') || github.event.inputs.release == 'true')
+        working-directory: ${{ env.SRC_DIR }}
+        shell: bash
+        run: |
+          v=$(grep -oE 'const version = "[^"]+"' csdk/main.go \
+              | head -1 | sed -E 's/.*"(.*)"/\1/')
+          [ -n "$v" ] || { echo "FAIL: 取不到 csdk/main.go 的 version"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "resolved version: $v"
+
+      - name: Attach to GitHub Release
+        if: >
+          steps.flag.outputs.run == 'true' &&
+          (startsWith(github.ref, 'refs/tags/') || github.event.inputs.release == 'true')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('zssdk-v{0}', steps.ver.outputs.version) }}
+          name: zssdk ${{ steps.ver.outputs.version }}
+          files: ${{ env.SRC_DIR }}/out/*.tar.gz
+          fail_on_unmatched_files: true
